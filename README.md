@@ -9,9 +9,10 @@ Temalar: Obsidian, Terminal.
 | Klasör | İçerik | Durum |
 |---|---|---|
 | `crates/kazma-core` | Saf Rust çekirdek: sürüm JSON'u ve kurallar, Fabric profil birleştirme, indirme planı, başlatma komutu, Java (Adoptium), çevrimdışı UUID, davet ayrıştırma, mod manifesti + eşitleme planı, SHA-512 doğrulama, Ed25519 imza | 41 test geçiyor (`cargo test`) |
-| `crates/kazma-cli` | Komut satırından indirip oyunu çevrimdışı hesapla başlatır | 4 birim testi geçiyor; canlı çalıştırma Windows'ta denenecek |
-| `src-tauri` | Tauri 2 kabuğu, çekirdek fonksiyonları arayüze komut olarak açar | Yazıldı, bu ortamda derlenmedi (Windows gerekir) |
-| `ui` | Arayüz (Obsidian ve Terminal temalı), şimdilik örnek verilerle | Prototip |
+| `crates/kazma-cli` | Komut satırı: sürüm seç, server'a katıl, server sahibi araçları | 4 birim testi geçiyor |
+| `crates/kazma-engine` | Kurulum, başlatma, instance kaydı, server'a katılma, mod eşitleme, Modrinth arama/kurma. İlerleme bir `Reporter` ile bildirilir | 21 test geçiyor |
+| `src-tauri` | Tauri 2 kabuğu, motor fonksiyonlarını arayüze komut olarak açar (ince sarmalayıcılar) | Bu ortamda derlenmez; GitHub Actions'ta Windows'ta derlenir |
+| `ui` | Arayüz (Obsidian ve Terminal temalı). `index.html` prototip, `live.js` Tauri içinde gerçek veriyi bağlar | Sahte arka uçla denendi |
 
 ## Windows'ta çalıştırma
 
@@ -39,6 +40,39 @@ cargo run -p kazma-cli --release -- launch 1.21.1 Mustafa --join play.example.co
 Dosyalar `%APPDATA%\.kazma` altına yazılır (`--root` ile değişir). Java'yı kendin vermek için `--java YOL`.
 
 Alternatif (çevrimdışı) hesapla yalnızca `online-mode=false` server'lara ve tek kişilik dünyaya girilebilir.
+
+## Sürüm seçimi
+
+```
+kazma-cli versions [--snapshots]                 # seçilebilir sürümler
+kazma-cli launch 1.20.1 Mustafa                  # vanilla
+kazma-cli launch 1.20.1 Mustafa --fabric         # en son kararlı Fabric
+kazma-cli launch 1.20.1 Mustafa --fabric 0.15.11 # belirli Fabric sürümü
+```
+
+Her sürüm ve yükleyici kendi instance'ında çalışır (`instances/<sürüm>-<yükleyici>`).
+
+## Server'a katılma (server'ın sürümüne geçerek)
+
+```
+kazma-cli join "kazma://join/play.example.com:25565?m=https%3A%2F%2F..." Mustafa
+```
+
+Launcher manifesti okur, **server hangi Minecraft ve Fabric sürümünü istiyorsa** o sürümü bu server'a
+özel bir instance'ta (`instances/server-<adres>-<port>`) kurar, modları orada eşitler ve doğrudan bağlanır.
+Oyuncunun kendi seçtiği sürüm ve modları etkilenmez. Fazla modlar silinmez, `.jar.disabled` olarak kenara alınır.
+
+Server sahibi için:
+
+```
+kazma-cli make-key anahtar.txt                   # bir kez, gizli tut
+kazma-cli make-manifest --name "Dostlar SMP" --game 1.21.1 --fabric 0.16.9 --mods C:\server\mods --key anahtar.txt --out kazma.json
+kazma-cli make-invite play.example.com:25565 https://adresin/kazma.json
+```
+
+`make-manifest`, modların indirme adreslerini Modrinth'ten SHA-512 ile bulur. Modrinth'te olmayanlar için `--base-url`.
+Manifest, anahtarınla imzalanır; oyuncular ilk katılımda parmak izini onaylar ve sonraki katılımlarda anahtar
+değişirse katılım reddedilir.
 
 ## Mod eşitleme akışı
 

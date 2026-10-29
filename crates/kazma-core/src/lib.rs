@@ -2,13 +2,16 @@
 //! ağ erişimi olmadan test edilebilir. Ağ ve dosya işlemleri Tauri tarafında yapılır.
 
 pub mod account;
+pub mod instance;
 pub mod invite;
 pub mod java;
 pub mod launch;
 pub mod manifest;
+pub mod modjar;
 pub mod mojang;
 pub mod plan;
 pub mod sign;
+pub mod trust;
 pub mod verify;
 pub mod version;
 

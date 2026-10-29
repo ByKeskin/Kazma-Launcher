@@ -42,6 +42,13 @@ impl VersionManifest {
     pub fn releases(&self) -> Vec<&VersionRef> {
         self.versions.iter().filter(|v| v.kind == VersionKind::Release).collect()
     }
+    /// Oyuncunun seçebileceği sürümler (en yeni önce): yayınlar, istenirse ön sürümler. Eski beta/alfa dışarıda.
+    pub fn versions(&self, include_snapshots: bool) -> Vec<&VersionRef> {
+        self.versions
+            .iter()
+            .filter(|v| v.kind == VersionKind::Release || (include_snapshots && v.kind == VersionKind::Snapshot))
+            .collect()
+    }
     pub fn find(&self, id: &str) -> Option<&VersionRef> {
         self.versions.iter().find(|v| v.id == id)
     }
@@ -51,7 +58,7 @@ pub fn parse_manifest(json: &str) -> Result<VersionManifest> {
     serde_json::from_str(json).map_err(|e| Error::BadManifest(e.to_string()))
 }
 
-fn plain(s: &str) -> bool {
+pub(crate) fn plain(s: &str) -> bool {
     !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'+'))
 }
 
@@ -84,6 +91,14 @@ mod tests {
         assert_eq!(ids, ["1.21.4", "1.21.1"]);
         assert_eq!(m.find("b1.7.3").unwrap().kind, VersionKind::OldBeta);
         assert!(m.find("9.9").is_none());
+    }
+
+    #[test]
+    fn selectable_versions() {
+        let m = parse_manifest(SAMPLE).unwrap();
+        let ids = |snap| m.versions(snap).iter().map(|v| v.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(false), ["1.21.4", "1.21.1"]);
+        assert_eq!(ids(true), ["25w02a", "1.21.4", "1.21.1"], "old_beta hiç görünmez");
     }
 
     #[test]

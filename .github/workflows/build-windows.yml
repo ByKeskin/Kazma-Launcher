@@ -9,13 +9,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            src-tauri -> target
       - name: Testler
         run: cargo test --workspace
-      - name: Derleme
+      - name: Komut satırı aracı
         run: cargo build -p kazma-cli --release
+      - name: Arayüzlü uygulama (Tauri)
+        working-directory: src-tauri
+        run: cargo build --release --features custom-protocol
+      - name: Paketle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item src-tauri/target/release/kazma.exe dist/Kazma.exe
+          Copy-Item target/release/kazma-cli.exe dist/
       - uses: actions/upload-artifact@v4
         with:
-          name: kazma-cli-windows
-          path: |
-            target/release/kazma-cli.exe
-            scripts/kazma-oyna.bat
+          name: kazma-windows
+          path: dist

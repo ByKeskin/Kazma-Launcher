@@ -388,13 +388,10 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 name = "kazma-cli"
 version = "0.1.0"
 dependencies = [
- "hex",
  "kazma-core",
+ "kazma-engine",
  "serde_json",
- "sha1",
- "sha2",
- "ureq",
- "zip",
+ "url",
 ]
 
 [[package]]
@@ -409,6 +406,22 @@ dependencies = [
  "sha2",
  "thiserror",
  "url",
+]
+
+[[package]]
+name = "kazma-engine"
+version = "0.1.0"
+dependencies = [
+ "getrandom",
+ "hex",
+ "kazma-core",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "ureq",
+ "url",
+ "zip",
 ]
 
 [[package]]

@@ -40,6 +40,9 @@ html,body{height:100%}
 body{font-family:var(--font-body);background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5;overflow:hidden}
 body::before{content:"";position:fixed;inset:0;pointer-events:none;
   background:radial-gradient(60% 50% at 88% 0%,var(--glow1),transparent 70%),radial-gradient(55% 55% at 0% 100%,var(--glow2),transparent 70%)}
+body.live .titlebar{display:none}
+body.live .app{grid-template-rows:minmax(0,1fr)}
+body.live .view-note{padding:22px}
 body[data-skin="terminal"]::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;opacity:.35;
   background:repeating-linear-gradient(0deg,rgba(0,0,0,.28) 0 1px,transparent 1px 3px)}
 button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
@@ -853,9 +856,11 @@ $('#loginOk').addEventListener('click',function(){
 });
 addEventListener('keydown',function(e){if(e.key==='Escape'){$('#loginModal').hidden=true}});
 
+window.__kz={paint:paint,ic:ic,toast:toast,route:route};
 setAcct();route();
 addEventListener('resize',drawStats);
 })();
 </script>
+<script src="live.js"></script>
 </body>
 </html>

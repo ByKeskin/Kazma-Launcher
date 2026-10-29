@@ -2,13 +2,10 @@
 name = "kazma-cli"
 version = "0.1.0"
 edition = "2021"
-description = "Kazma: komut satırından Minecraft indirir ve başlatır (çevrimdışı hesap)"
+description = "Kazma komut satırı: sürüm seçerek oyna, server'a katıl, server sahibi araçları"
 
 [dependencies]
 kazma-core = { path = "../kazma-core" }
-ureq = "2"
-zip = { version = "2", default-features = false, features = ["deflate"] }
-sha1 = "0.10"
-sha2 = "0.10"
-hex = "0.4"
+kazma-engine = { path = "../kazma-engine" }
 serde_json = "1"
+url = "2"

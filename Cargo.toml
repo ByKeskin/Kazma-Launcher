@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/kazma-core", "crates/kazma-cli"]
+members = ["crates/kazma-core", "crates/kazma-engine", "crates/kazma-cli"]
 # src-tauri/ bilerek workspace dışında: Tauri yalnızca Windows/macOS/Linux masaüstünde derlenir,
 # çekirdek ise her yerde `cargo test` ile denenebilir.
 exclude = ["src-tauri"]

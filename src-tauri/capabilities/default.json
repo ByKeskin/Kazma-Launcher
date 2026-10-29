@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Ana pencere için temel izinler",
+  "description": "Ana pencere için temel izinler (komutlar ve olaylar)",
   "windows": ["main"],
   "permissions": ["core:default"]
 }

@@ -1,100 +1,170 @@
 // Release derlemesinde Windows'ta konsol penceresi açılmasın.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use kazma_core::{account, invite, manifest, mojang, sign};
-use serde::Serialize;
+//! Tauri kabuğu: yalnızca ince sarmalayıcılar. Asıl mantık `kazma-engine`'de, orada testli.
+//! Arayüze giden hatalar düz Türkçe metindir.
 
-/// Arayüze dönen hatalar düz metindir; Türkçe mesajlar kazma-core'dan gelir.
+use kazma_engine::report::Reporter;
+use kazma_engine::{app, install, modrinth};
+use serde::Serialize;
+use std::path::PathBuf;
+use std::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager, State};
+
 type CmdResult<T> = Result<T, String>;
 
-#[derive(Serialize)]
-struct OfflineAccount {
-    name: String,
-    uuid: String,
+struct AppState {
+    root: PathBuf,
+    prepared: Mutex<Option<app::Prepared>>,
+    busy: Mutex<bool>,
+}
+
+#[derive(Serialize, Clone)]
+struct ProgressEvent {
+    kind: &'static str,
+    text: String,
+    done: usize,
+    total: usize,
+}
+
+#[derive(Serialize, Clone)]
+struct DoneEvent {
+    ok: bool,
+    error: Option<String>,
+    code: Option<i32>,
+    log: Option<String>,
+}
+
+/// Motorun ilerleme bildirimlerini arayüze olay olarak iletir.
+struct Events(AppHandle);
+
+impl Reporter for Events {
+    fn stage(&self, text: &str) {
+        let _ = self.0.emit("progress", ProgressEvent { kind: "stage", text: text.to_string(), done: 0, total: 0 });
+    }
+    fn progress(&self, label: &str, done: usize, total: usize) {
+        let _ = self.0.emit("progress", ProgressEvent { kind: "bar", text: label.to_string(), done, total });
+    }
+}
+
+fn begin(state: &AppState) -> CmdResult<()> {
+    let mut b = state.busy.lock().unwrap();
+    if *b {
+        return Err("Başka bir işlem sürüyor, bitmesini bekle.".into());
+    }
+    *b = true;
+    Ok(())
+}
+
+fn finish(handle: &AppHandle, r: Result<kazma_engine::install::GameExit, String>) {
+    let ev = match r {
+        Ok(e) => DoneEvent { ok: e.code == 0, error: None, code: Some(e.code), log: Some(e.log.display().to_string()) },
+        Err(e) => DoneEvent { ok: false, error: Some(e), code: None, log: None },
+    };
+    *handle.state::<AppState>().busy.lock().unwrap() = false;
+    let _ = handle.emit("launch-done", ev);
 }
 
 #[tauri::command]
-fn offline_account(name: String) -> CmdResult<OfflineAccount> {
-    let uuid = account::offline_uuid(&name).map_err(|e| e.to_string())?;
-    Ok(OfflineAccount { name, uuid })
-}
-
-#[derive(Serialize)]
-struct ParsedInvite {
-    host: String,
-    port: u16,
+fn get_config(state: State<'_, AppState>) -> app::Config {
+    app::load_config(&state.root)
 }
 
 #[tauri::command]
-fn parse_invite(input: String) -> CmdResult<ParsedInvite> {
-    let i = invite::parse(&input).map_err(|e| e.to_string())?;
-    Ok(ParsedInvite { host: i.host, port: i.port })
+fn set_player(state: State<'_, AppState>, name: String) -> CmdResult<app::Config> {
+    app::set_player(&state.root, &name)
 }
 
-#[derive(Serialize)]
-struct VersionInfo {
-    id: String,
-    url: String,
-}
-
-/// Arayüz Mojang manifestini indirir (CSP/HTTP kısıtı yüzünden Rust tarafında indirilecek, bkz. README),
-/// metni buraya verir; burada ayrıştırılıp yalnızca sürüm listesi döner.
 #[tauri::command]
-fn list_release_versions(manifest_json: String) -> CmdResult<Vec<VersionInfo>> {
-    let m = mojang::parse_manifest(&manifest_json).map_err(|e| e.to_string())?;
-    Ok(m.releases().into_iter().map(|v| VersionInfo { id: v.id.clone(), url: v.url.clone() }).collect())
+fn get_instances(state: State<'_, AppState>) -> Vec<app::InstanceInfo> {
+    app::list_instances(&state.root)
 }
 
-#[derive(Serialize)]
-struct PlanView {
-    ready: Vec<String>,
-    download: Vec<String>,
-    update: Vec<String>,
-    disable: Vec<String>,
-    keep: Vec<String>,
-    download_bytes: u64,
-    signer: String,
-}
-
-/// Server manifestini doğrular (şema, dosya adı, adres, imza) ve yerel modlarla karşılaştırır.
-/// `pinned_signer`: daha önce bu server için saklanan açık anahtar (varsa).
 #[tauri::command]
-fn plan_sync(
-    manifest_json: String,
-    server_host: String,
-    pinned_signer: Option<String>,
-    local: Vec<LocalModArg>,
-) -> CmdResult<PlanView> {
-    let m = manifest::parse(&manifest_json).map_err(|e| e.to_string())?;
-    m.validate(Some(&server_host)).map_err(|e| e.to_string())?;
-    let signer = sign::verify(&m, pinned_signer.as_deref()).map_err(|e| e.to_string())?;
-    let local: Vec<manifest::LocalMod> = local
-        .into_iter()
-        .map(|l| manifest::LocalMod { id: l.id, file: l.file, sha512: l.sha512, client_only: l.client_only })
-        .collect();
-    let p = manifest::plan(&m, &local);
-    Ok(PlanView {
-        download_bytes: p.download_bytes(),
-        ready: p.ready,
-        download: p.download.into_iter().map(|e| e.id).collect(),
-        update: p.update.into_iter().map(|(_, e)| e.id).collect(),
-        disable: p.disable.into_iter().map(|l| l.id).collect(),
-        keep: p.keep.into_iter().map(|l| l.id).collect(),
-        signer,
-    })
+async fn get_versions(snapshots: bool) -> CmdResult<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(move || install::list_versions(snapshots)).await.map_err(|e| e.to_string())?
 }
 
-#[derive(serde::Deserialize)]
-struct LocalModArg {
-    id: String,
-    file: String,
-    sha512: String,
-    client_only: bool,
+/// `fabric`: boş = vanilla değil, "latest" = en son kararlı Fabric, başka bir değer = o Fabric sürümü.
+/// Vanilla için `None` gönderilir.
+#[tauri::command]
+async fn create_instance(state: State<'_, AppState>, name: String, game: String, fabric: Option<String>) -> CmdResult<app::InstanceInfo> {
+    let root = state.root.clone();
+    let loader = fabric.map(|v| if v == "latest" { None } else { Some(v) });
+    tauri::async_runtime::spawn_blocking(move || app::create_instance(&root, &name, &game, loader)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn launch_instance(handle: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    begin(&state)?;
+    let root = state.root.clone();
+    std::thread::spawn(move || {
+        let r = app::launch_instance(&root, &id, &None, &Events(handle.clone()));
+        finish(&handle, r);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+async fn join_prepare(handle: AppHandle, state: State<'_, AppState>, invite: String) -> CmdResult<app::JoinView> {
+    let root = state.root.clone();
+    let p = tauri::async_runtime::spawn_blocking(move || app::join_prepare(&root, &invite, &Events(handle))).await.map_err(|e| e.to_string())??;
+    let view = app::join_view(&p);
+    *state.prepared.lock().unwrap() = Some(p);
+    Ok(view)
+}
+
+#[tauri::command]
+fn join_run(handle: AppHandle, state: State<'_, AppState>, trust: bool) -> CmdResult<()> {
+    let p = state.prepared.lock().unwrap().clone().ok_or_else(|| "Önce server'ı sorgula.".to_string())?;
+    begin(&state)?;
+    let root = state.root.clone();
+    std::thread::spawn(move || {
+        let r = app::join_run(&root, &p, trust, &None, &Events(handle.clone()));
+        finish(&handle, r);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+async fn search_mods(state: State<'_, AppState>, instance: String, query: String, category: Option<String>) -> CmdResult<Vec<modrinth::Hit>> {
+    let info = app::read_info(&state.root, &instance)?;
+    if info.loader != "fabric" {
+        return Err("Mod eklemek için Fabric'li bir instance seç.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || modrinth::search_live(&query, &info.game, "fabric", category.as_deref())).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn install_mod(handle: AppHandle, state: State<'_, AppState>, instance: String, project: String) -> CmdResult<Vec<String>> {
+    let info = app::read_info(&state.root, &instance)?;
+    if info.loader != "fabric" {
+        return Err("Mod eklemek için Fabric'li bir instance seç.".into());
+    }
+    if info.kind == "server" {
+        return Err("Bir server'ın modları manifestle yönetilir; buraya elle mod eklenmez.".into());
+    }
+    let dir = state.root.join("instances").join(&info.id).join("mods");
+    tauri::async_runtime::spawn_blocking(move || modrinth::install_live(&dir, &project, &info.game, "fabric", &Events(handle))).await.map_err(|e| e.to_string())?
 }
 
 fn main() {
+    let root = app::default_root();
+    let _ = std::fs::create_dir_all(&root);
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![offline_account, parse_invite, list_release_versions, plan_sync])
+        .manage(AppState { root, prepared: Mutex::new(None), busy: Mutex::new(false) })
+        .invoke_handler(tauri::generate_handler![
+            get_config,
+            set_player,
+            get_instances,
+            get_versions,
+            create_instance,
+            launch_instance,
+            join_prepare,
+            join_run,
+            search_mods,
+            install_mod
+        ])
         .run(tauri::generate_context!())
         .expect("Kazma başlatılamadı");
 }

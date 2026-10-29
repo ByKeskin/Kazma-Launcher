@@ -64,12 +64,17 @@ pub fn safe_file_name(f: &str) -> bool {
 
 /// `extra_host`: davet edilen server'ın kendi adı. Server kendi barındırdığı modları buradan sunabilir.
 pub fn url_trusted(url: &str, extra_host: Option<&str>) -> bool {
+    url_trusted_for(url, extra_host.as_slice())
+}
+
+/// `extra_hosts`: server'ın kendi alan adı ve manifesti sunan alan adı gibi ek izinli adresler.
+pub fn url_trusted_for(url: &str, extra_hosts: &[&str]) -> bool {
     let Ok(u) = Url::parse(url) else { return false };
     if u.scheme() != "https" {
         return false;
     }
     let Some(host) = u.host_str() else { return false };
-    TRUSTED_HOSTS.contains(&host) || extra_host.map(|h| h.eq_ignore_ascii_case(host)).unwrap_or(false)
+    TRUSTED_HOSTS.contains(&host) || extra_hosts.iter().any(|h| h.eq_ignore_ascii_case(host))
 }
 
 pub fn parse(json: &str) -> Result<PackManifest> {
@@ -78,6 +83,10 @@ pub fn parse(json: &str) -> Result<PackManifest> {
 
 impl PackManifest {
     pub fn validate(&self, extra_host: Option<&str>) -> Result<()> {
+        self.validate_with(extra_host.as_slice())
+    }
+
+    pub fn validate_with(&self, extra_hosts: &[&str]) -> Result<()> {
         for m in &self.mods {
             if !safe_file_name(&m.file) {
                 return Err(Error::BadManifest(format!("güvensiz dosya adı: {}", m.file)));
@@ -85,7 +94,7 @@ impl PackManifest {
             if m.sha512.len() != 128 || !m.sha512.bytes().all(|b| b.is_ascii_hexdigit()) {
                 return Err(Error::BadManifest(format!("{}: SHA-512 özeti geçersiz", m.id)));
             }
-            if m.side != Side::Server && !url_trusted(&m.url, extra_host) {
+            if m.side != Side::Server && !url_trusted_for(&m.url, extra_hosts) {
                 return Err(Error::UntrustedUrl(m.url.clone()));
             }
         }
@@ -102,7 +111,7 @@ pub struct LocalMod {
     pub client_only: bool,
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SyncPlan {
     /// Aynı id ve aynı özet: dokunulmaz.
     pub ready: Vec<String>,
@@ -239,6 +248,15 @@ mod tests {
         let mut e = entry("x", 'a', Side::Both);
         e.url = "https://evil.example/x.jar".into();
         assert!(matches!(pack(vec![e]).validate(None), Err(Error::UntrustedUrl(_))));
+    }
+
+    #[test]
+    fn multiple_extra_hosts() {
+        let mut e = entry("x", 'a', Side::Both);
+        e.url = "https://files.example.org/x.jar".into();
+        let m = pack(vec![e]);
+        assert!(m.validate_with(&["play.example.com", "files.example.org"]).is_ok());
+        assert!(m.validate_with(&["play.example.com"]).is_err());
     }
 
     #[test]
