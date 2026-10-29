@@ -75,6 +75,20 @@ fn set_player(state: State<'_, AppState>, name: String) -> CmdResult<app::Config
     app::set_player(&state.root, &name)
 }
 
+/// Instance klasörünü (dünyalar dahil) kalıcı olarak siler. Arayüz önce onay alır.
+#[tauri::command]
+fn delete_instance(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    app::delete_instance(&state.root, &id)
+}
+
+/// Server sahibi: mod klasöründen paylaşılabilir paket kodu üretir.
+#[tauri::command]
+async fn make_pack(handle: AppHandle, path: String, name: String, address: String, game: String, loader: String, version: Option<String>) -> CmdResult<kazma_engine::serverkit::PackBuild> {
+    tauri::async_runtime::spawn_blocking(move || app::make_pack(std::path::Path::new(&path), &name, &address, &game, &loader, version, &Events(handle)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn get_instances(state: State<'_, AppState>) -> Vec<app::InstanceInfo> {
     app::list_instances(&state.root)
@@ -85,13 +99,40 @@ async fn get_versions(snapshots: bool) -> CmdResult<Vec<String>> {
     tauri::async_runtime::spawn_blocking(move || install::list_versions(snapshots)).await.map_err(|e| e.to_string())?
 }
 
-/// `fabric`: boş = vanilla değil, "latest" = en son kararlı Fabric, başka bir değer = o Fabric sürümü.
-/// Vanilla için `None` gönderilir.
+/// `loader`: vanilla, fabric, quilt, forge ya da neoforge. `version` boşsa en uygun yükleyici sürümü ağdan bulunur.
 #[tauri::command]
-async fn create_instance(state: State<'_, AppState>, name: String, game: String, fabric: Option<String>) -> CmdResult<app::InstanceInfo> {
+async fn create_instance(state: State<'_, AppState>, name: String, game: String, loader: String, version: Option<String>) -> CmdResult<app::InstanceInfo> {
     let root = state.root.clone();
-    let loader = fabric.map(|v| if v == "latest" { None } else { Some(v) });
-    tauri::async_runtime::spawn_blocking(move || app::create_instance(&root, &name, &game, loader)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || app::create_instance(&root, &name, &game, &loader, version)).await.map_err(|e| e.to_string())?
+}
+
+/// Adresle bağlanma (Aternos vb.): server'ı sorgulayıp sürümünü ve mod yükleyici ipucunu döndürür.
+#[tauri::command]
+async fn probe_server(handle: AppHandle, state: State<'_, AppState>, address: String) -> CmdResult<app::ProbeView> {
+    let root = state.root.clone();
+    tauri::async_runtime::spawn_blocking(move || app::probe_server(&root, &address, &Events(handle))).await.map_err(|e| e.to_string())?
+}
+
+/// Server için instance oluşturur (oyunu açmaz); oyuncu önce mod ekleyebilir.
+#[tauri::command]
+async fn connect_prepare(handle: AppHandle, state: State<'_, AppState>, address: String, game: String, loader: String, version: Option<String>) -> CmdResult<app::InstanceInfo> {
+    let root = state.root.clone();
+    tauri::async_runtime::spawn_blocking(move || app::connect_server(&root, &address, &game, &loader, version, false, &None, &Events(handle)).map(|r| r.0))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Server için instance oluşturur ve oyunu açıp doğrudan bağlanır.
+#[tauri::command]
+fn connect_launch(handle: AppHandle, state: State<'_, AppState>, address: String, game: String, loader: String, version: Option<String>) -> CmdResult<()> {
+    begin(&state)?;
+    let root = state.root.clone();
+    std::thread::spawn(move || {
+        let r = app::connect_server(&root, &address, &game, &loader, version, true, &None, &Events(handle.clone()))
+            .and_then(|(_, exit)| exit.ok_or_else(|| "oyun başlatılamadı".to_string()));
+        finish(&handle, r);
+    });
+    Ok(())
 }
 
 #[tauri::command]
@@ -129,23 +170,23 @@ fn join_run(handle: AppHandle, state: State<'_, AppState>, trust: bool) -> CmdRe
 #[tauri::command]
 async fn search_mods(state: State<'_, AppState>, instance: String, query: String, category: Option<String>) -> CmdResult<Vec<modrinth::Hit>> {
     let info = app::read_info(&state.root, &instance)?;
-    if info.loader != "fabric" {
-        return Err("Mod eklemek için Fabric'li bir instance seç.".into());
+    if info.loader == "vanilla" {
+        return Err("Mod eklemek için Fabric, Quilt, Forge ya da NeoForge'lu bir instance seç.".into());
     }
-    tauri::async_runtime::spawn_blocking(move || modrinth::search_live(&query, &info.game, "fabric", category.as_deref())).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || modrinth::search_live(&query, &info.game, &info.loader, category.as_deref())).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 async fn install_mod(handle: AppHandle, state: State<'_, AppState>, instance: String, project: String) -> CmdResult<Vec<String>> {
     let info = app::read_info(&state.root, &instance)?;
-    if info.loader != "fabric" {
-        return Err("Mod eklemek için Fabric'li bir instance seç.".into());
+    if info.loader == "vanilla" {
+        return Err("Mod eklemek için Fabric, Quilt, Forge ya da NeoForge'lu bir instance seç.".into());
     }
-    if info.kind == "server" {
-        return Err("Bir server'ın modları manifestle yönetilir; buraya elle mod eklenmez.".into());
+    if info.managed {
+        return Err("Bu instance'ın modlarını server'ın manifesti yönetir; elle mod eklenmez.".into());
     }
     let dir = state.root.join("instances").join(&info.id).join("mods");
-    tauri::async_runtime::spawn_blocking(move || modrinth::install_live(&dir, &project, &info.game, "fabric", &Events(handle))).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || modrinth::install_live(&dir, &project, &info.game, &info.loader, &Events(handle))).await.map_err(|e| e.to_string())?
 }
 
 fn main() {
@@ -157,8 +198,13 @@ fn main() {
             get_config,
             set_player,
             get_instances,
+            delete_instance,
+            make_pack,
             get_versions,
             create_instance,
+            probe_server,
+            connect_prepare,
+            connect_launch,
             launch_instance,
             join_prepare,
             join_run,

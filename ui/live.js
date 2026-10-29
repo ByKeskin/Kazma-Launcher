@@ -17,11 +17,20 @@
 
   function hash(s) { var h = 7; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
   function scene(cv, id) { var h = hash(id); kz.paint(cv, SCN[h % 4], h % 97); }
-  function loaderLabel(i) { return i.loader === 'fabric' ? 'Fabric ' + i.loader_version : 'Vanilla'; }
+  var LN = { vanilla: 'Vanilla', fabric: 'Fabric', quilt: 'Quilt', forge: 'Forge', neoforge: 'NeoForge' };
+  function loaderName(k) { return LN[k] || k; }
+  function loaderLabel(i) { return i.loader === 'vanilla' ? 'Vanilla' : loaderName(i.loader) + ' ' + i.loader_version; }
+  function loaderOptions(sel) { return Object.keys(LN).map(function (k) { return '<option value="' + k + '"' + (k === sel ? ' selected' : '') + '>' + LN[k] + '</option>'; }).join(''); }
   function ago(ts) {
     if (!ts) return 'Henüz oynanmadı';
     var d = Math.floor((Date.now() / 1000 - ts) / 86400);
     return d <= 0 ? 'Bugün' : d === 1 ? 'Dün' : d + ' gün önce';
+  }
+  function trashIcon() { return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>'; }
+  function playButton(i, cls) {
+    return (i.managed && i.source)
+      ? '<button class="btn primary ' + cls + '" data-resync="' + esc(i.id) + '">' + kz.ic('refresh', 16) + 'Güncelle ve katıl</button>'
+      : '<button class="btn primary ' + cls + '" data-play="' + esc(i.id) + '">' + kz.ic('play', cls === 'lg' ? 20 : 14) + 'Oyna</button>';
   }
   function mb(b) { return (b / 1048576).toFixed(1) + ' MB'; }
 
@@ -102,6 +111,12 @@
     else { launchFail('Oyun ' + p.code + ' koduyla kapandı.\nGünlük dosyası: ' + p.log); }
     refresh();
   });
+  function resync(id) {
+    var i = instances.filter(function (x) { return x.id === id; })[0]; if (!i || !i.source) return;
+    location.hash = 'join'; kz.route();
+    $$('#jmSeg button').forEach(function (b) { if (b.dataset.jm === 'inv') b.click(); });
+    $('#joinIn').value = i.source; $('#queryBtn').click();
+  }
   function play(id) {
     if (!cfg.player) { openLogin(); toast('Önce oyuncu adını belirle'); return; }
     var i = instances.filter(function (x) { return x.id === id; })[0];
@@ -115,12 +130,16 @@
     '<h2 id="newTitle">Yeni instance</h2>' +
     '<div class="field"><label for="niVer">Minecraft sürümü</label><select id="niVer" class="in"><option>Sürümler yükleniyor...</option></select></div>' +
     '<label class="check" for="niSnap"><input type="checkbox" id="niSnap"><span>Ön sürümleri (snapshot) göster</span></label>' +
-    '<label class="check" for="niFab"><input type="checkbox" id="niFab"><span>Fabric (mod desteği) kur</span></label>' +
+    '<div class="field"><label for="niLoader">Mod yükleyici</label><select id="niLoader" class="in">' + loaderOptions('vanilla') + '</select><span class="hint" id="niHint">Vanilla: modsuz, saf Minecraft.</span></div>' +
     '<div class="field"><label for="niName">Ad</label><input id="niName" class="in" maxlength="40" autocomplete="off"></div>' +
     '<div class="err" id="niErr" aria-live="polite"></div>' +
     '<div style="display:flex;gap:10px;justify-content:flex-end"><button class="btn" id="niCancel">Vazgeç</button><button class="btn primary" id="niOk">Oluştur</button></div></div></div>');
   var verCache = {}, nameTouched = false;
-  function autoName() { if (!nameTouched) $('#niName').value = 'Minecraft ' + $('#niVer').value + ($('#niFab').checked ? ' Fabric' : ''); }
+  function autoName() {
+    var l = $('#niLoader').value;
+    $('#niHint').textContent = l === 'vanilla' ? 'Vanilla: modsuz, saf Minecraft.' : (l === 'forge' || l === 'neoforge' ? loaderName(l) + ' ilk oyunda kurulur, birkaç dakika sürebilir. En uygun sürüm otomatik seçilir.' : loaderName(l) + ' için en uygun sürüm otomatik seçilir.');
+    if (!nameTouched) $('#niName').value = 'Minecraft ' + $('#niVer').value + (l === 'vanilla' ? '' : ' ' + loaderName(l));
+  }
   function loadVersions() {
     var snap = $('#niSnap').checked, sel = $('#niVer');
     var show = function (list) { sel.innerHTML = list.map(function (v) { return '<option>' + esc(v) + '</option>'; }).join(''); autoName(); };
@@ -131,17 +150,37 @@
   }
   function openNew() { nameTouched = false; $('#niErr').textContent = ''; $('#newModal').hidden = false; loadVersions(); }
   $('#niSnap').addEventListener('change', loadVersions);
-  $('#niFab').addEventListener('change', autoName);
+  $('#niLoader').addEventListener('change', autoName);
   $('#niVer').addEventListener('change', autoName);
   $('#niName').addEventListener('input', function () { nameTouched = true; });
   $('#niCancel').addEventListener('click', function () { $('#newModal').hidden = true; });
   $('#niOk').addEventListener('click', function () {
     var game = $('#niVer').value; if (!game) { $('#niErr').textContent = 'Önce bir sürüm seç'; return; }
-    $('#niOk').disabled = true; $('#niErr').textContent = '';
-    inv('create_instance', { name: $('#niName').value, game: game, fabric: $('#niFab').checked ? 'latest' : null })
+    $('#niOk').disabled = true; $('#niErr').textContent = ''; $('#niOk').textContent = 'Oluşturuluyor...';
+    inv('create_instance', { name: $('#niName').value, game: game, loader: $('#niLoader').value, version: null })
       .then(function (i) { $('#newModal').hidden = true; toast(i.name + ' oluşturuldu'); return refresh(); })
       .catch(function (e) { $('#niErr').textContent = errText(e); })
-      .then(function () { $('#niOk').disabled = false; });
+      .then(function () { $('#niOk').disabled = false; $('#niOk').textContent = 'Oluştur'; });
+  });
+
+  /* ---------- instance silme ---------- */
+  document.body.insertAdjacentHTML('beforeend',
+    '<div class="modal" id="delModal" hidden role="dialog" aria-modal="true" aria-labelledby="delTitle"><div class="sheet">' +
+    '<h2 id="delTitle">Instance silinsin mi?</h2><p id="delText"></p><p class="hint">Bu işlem geri alınamaz: dünyalar, ayarlar ve modlar dahil klasörün tamamı silinir. Oyun açıksa önce kapat.</p>' +
+    '<div class="err" id="delErr" aria-live="polite"></div>' +
+    '<div style="display:flex;gap:10px;justify-content:flex-end"><button class="btn" id="delCancel">Vazgeç</button><button class="btn dangerfill" id="delOk">Sil</button></div></div></div>');
+  var delId = null;
+  function openDelete(id) {
+    var i = instances.filter(function (x) { return x.id === id; })[0]; if (!i) return;
+    delId = id; $('#delErr').textContent = '';
+    $('#delText').textContent = '"' + i.name + '" (' + i.game + ', ' + loaderLabel(i) + ') silinecek.';
+    $('#delModal').hidden = false; $('#delCancel').focus();
+  }
+  $('#delCancel').addEventListener('click', function () { $('#delModal').hidden = true; });
+  $('#delOk').addEventListener('click', function () {
+    var b = $('#delOk'); b.disabled = true;
+    inv('delete_instance', { id: delId }).then(function () { $('#delModal').hidden = true; toast('Instance silindi'); return refresh(); })
+      .catch(function (e) { $('#delErr').textContent = errText(e); }).then(function () { b.disabled = false; });
   });
 
   /* ---------- ana sayfa ---------- */
@@ -151,7 +190,7 @@
       ? '<div class="hero"><canvas id="heroCv" aria-hidden="true"></canvas><div class="hero-in"><div><span class="pill acc"><i class="dot"></i>' + (cur.id === cfg.last_instance ? 'Son oynanan' : 'Hazır') + '</span>' +
         '<h1>' + esc(cur.name) + '</h1><div class="chips"><span class="pill mute">' + esc(loaderLabel(cur)) + '</span><span class="pill mute">Minecraft ' + esc(cur.game) + '</span><span class="pill mute">' + cur.mods + ' mod</span>' +
         (cur.kind === 'server' ? '<span class="pill mute">' + esc(cur.server_host) + '</span>' : '') + '</div></div>' +
-        '<div class="hero-act"><button class="btn primary lg" data-play="' + esc(cur.id) + '">' + kz.ic('play', 20) + 'Oyna</button><button class="btn" data-go="join">' + kz.ic('join', 18) + 'Server\'a katıl</button></div></div></div>'
+        '<div class="hero-act">' + playButton(cur, 'lg') + '<button class="btn" data-go="join">' + kz.ic('join', 18) + 'Server\'a katıl</button></div></div></div>'
       : '<div class="hero"><canvas id="heroCv" aria-hidden="true"></canvas><div class="hero-in"><div><h1>Hoş geldin</h1><p>Başlamak için bir Minecraft sürümü seç.</p></div>' +
         '<div class="hero-act"><button class="btn primary lg" data-newinst="1">' + kz.ic('plus', 20) + 'İlk instance\'ını oluştur</button><button class="btn" data-go="join">' + kz.ic('join', 18) + 'Server\'a katıl</button></div></div></div>';
     $('#v-home').innerHTML = hero +
@@ -166,15 +205,15 @@
   /* ---------- kütüphane ---------- */
   function renderLibrary() {
     var cards = instances.map(function (i) {
-      return '<article class="card inst"><div class="thumb"><canvas data-cid="' + esc(i.id) + '" aria-hidden="true"></canvas></div><div class="body"><h3>' + esc(i.name) + '</h3>' +
+      return '<article class="card inst"><div class="thumb"><canvas data-cid="' + esc(i.id) + '" aria-hidden="true"></canvas><button class="del" data-del="' + esc(i.id) + '" aria-label="' + esc(i.name) + ' instance\'ını sil" title="Sil">' + trashIcon() + '</button></div><div class="body"><h3>' + esc(i.name) + '</h3>' +
         '<div class="meta"><span class="pill mute">' + esc(loaderLabel(i)) + '</span><span class="pill mute">' + esc(i.game) + '</span><span class="pill mute">' + i.mods + ' mod</span>' +
         (i.kind === 'server' ? '<span class="pill acc">Server</span>' : '') + '</div>' +
-        '<div class="foot"><span>' + esc(ago(i.last_played)) + '</span><button class="btn primary sm" data-play="' + esc(i.id) + '">' + kz.ic('play', 14) + 'Oyna</button></div></div></article>';
+        '<div class="foot"><span>' + esc(ago(i.last_played)) + '</span>' + playButton(i, 'sm') + '</div></div></article>';
     }).join('');
     $('#v-library').innerHTML =
       '<div class="ph"><div><h1>Kütüphane</h1><p>Her instance kendi Minecraft sürümüne, yükleyicisine ve modlarına sahip. Hepsi birbirinden bağımsız. Server\'lara katılınca o server için ayrı bir instance oluşur.</p></div>' +
       '<button class="btn primary" data-newinst="1">' + kz.ic('plus', 18) + 'Yeni instance</button></div>' +
-      '<div class="grid">' + cards + '<button class="add" data-newinst="1"><span>' + kz.ic('plus', 28) + '</span>Yeni instance oluştur<small class="hint">Sürüm ve Fabric seç</small></button></div>';
+      '<div class="grid">' + cards + '<button class="add" data-newinst="1"><span>' + kz.ic('plus', 28) + '</span>Yeni instance oluştur<small class="hint">Sürüm ve mod yükleyici seç</small></button></div>';
     $$('#v-library canvas[data-cid]').forEach(function (cv) { scene(cv, cv.dataset.cid); });
   }
 
@@ -190,11 +229,32 @@
 
   /* ---------- server'a katıl ---------- */
   var ST = { ready: ['good', 'Hazır'], download: ['warn', 'İndirilecek'], update: ['warn', 'Güncellenecek'], disable: ['bad', 'Devre dışı olacak'], keep: ['mute', 'Yerelde kalır'] };
+  var joinMode = 'inv', allVersions = null;
   $('#v-join').innerHTML =
-    '<div class="ph"><div><h1>Server\'a katıl</h1><p>Server sahibinin verdiği davet bağlantısını yapıştır. Kazma server\'ın Minecraft ve Fabric sürümüne geçer, eksik modları indirir ve seni bağlar.</p></div></div>' +
-    '<div class="card" style="display:flex;flex-direction:column;gap:14px"><div class="field"><label for="joinIn">Davet bağlantısı</label>' +
-    '<div class="joinbar"><input id="joinIn" class="in" placeholder="kazma://join/sunucu:25565?m=..." autocomplete="off"><button class="btn primary" id="queryBtn">' + kz.ic('refresh', 18) + 'Server\'ı sorgula</button></div></div>' +
-    '<div class="err" id="joinErr" aria-live="polite"></div></div><div id="joinOut" style="display:flex;flex-direction:column;gap:16px"></div>';
+    '<div class="ph"><div><h1>Server\'a katıl</h1><p>Mod eşitlemeli davet bağlantısıyla ya da herhangi bir server adresiyle (Aternos dahil) bağlan.</p></div></div>' +
+    '<div class="seg" id="jmSeg" style="grid-template-columns:repeat(3,1fr);max-width:820px"><button aria-pressed="true" data-jm="inv">Davet / paket kodu (otomatik eşitleme)</button><button aria-pressed="false" data-jm="addr">Sunucu adresi (Aternos vb.)</button><button aria-pressed="false" data-jm="own">Server sahibi: paket kodu üret</button></div>' +
+    '<div id="jm-inv" style="display:flex;flex-direction:column;gap:16px"><div class="card" style="display:flex;flex-direction:column;gap:14px"><div class="field"><label for="joinIn">Davet bağlantısı ya da paket kodu</label>' +
+    '<div class="joinbar"><input id="joinIn" class="in" placeholder="kazma://pack/...  ya da  kazma://join/...?m=..." autocomplete="off"><button class="btn primary" id="queryBtn">' + kz.ic('refresh', 18) + 'Server\'ı sorgula</button></div>' +
+    '<span class="hint">Server sahibi sana bir paket kodu ya da davet bağlantısı verdiyse buraya yapıştır. Kazma server\'ın sürümüne geçer ve modları kendisi indirip eşitler.</span></div>' +
+    '<div class="err" id="joinErr" aria-live="polite"></div></div><div id="joinOut" style="display:flex;flex-direction:column;gap:16px"></div></div>' +
+    '<div id="jm-addr" style="display:none;flex-direction:column;gap:16px"><div class="card" style="display:flex;flex-direction:column;gap:14px"><div class="field"><label for="addrIn">Sunucu adresi</label>' +
+    '<div class="joinbar"><input id="addrIn" class="in" placeholder="ornek.aternos.me:12345" autocomplete="off"><button class="btn primary" id="probeBtn">' + kz.ic('refresh', 18) + 'Server\'ı sorgula</button></div>' +
+    '<span class="hint">Kazma server\'a sorup sürümünü ve mod yükleyicisini tahmin eder. Server kapalıysa sürümü elle seçebilirsin.</span></div><div class="err" id="addrErr" aria-live="polite"></div></div><div id="addrOut" style="display:flex;flex-direction:column;gap:16px"></div></div>' +
+    '<div id="jm-own" style="display:none;flex-direction:column;gap:16px"><div class="card" style="display:flex;flex-direction:column;gap:14px"><h2 style="margin:0">Paket kodu üret</h2>' +
+    '<p class="hint">Server\'ın <b>mods</b> klasörünü seç; Kazma modları Modrinth\'te bulup tek bir kısa kod üretir. Kodu oyunculara gönder, katılırken modlar otomatik eşitlenir. Aternos\'ta mods klasörünü panelden indirip buraya koyabilirsin. Modrinth\'te olmayan modlar koda girmez, oyuncuların elle eklemesi gerekir.</p>' +
+    '<div class="field"><label for="ownPath">Mods klasörünün yolu</label><input id="ownPath" class="in" placeholder="C:\\Users\\...\\mods" autocomplete="off"><span class="hint">Dosya Gezgini\'nde klasörü açıp adres çubuğundaki yolu kopyalayıp yapıştır.</span></div>' +
+    '<div class="joinbar"><div class="field" style="flex:1;min-width:200px"><label for="ownName">Server adı</label><input id="ownName" class="in" maxlength="60" autocomplete="off"></div>' +
+    '<div class="field" style="flex:1;min-width:200px"><label for="ownAddr">Server adresi</label><input id="ownAddr" class="in" placeholder="ornek.aternos.me:12345" autocomplete="off"></div></div>' +
+    '<div class="joinbar"><div class="field" style="flex:1;min-width:160px"><label for="ownGame">Minecraft sürümü</label><select id="ownGame" class="in"><option>Yükleniyor...</option></select></div>' +
+    '<div class="field" style="flex:1;min-width:160px"><label for="ownLoader">Mod yükleyici</label><select id="ownLoader" class="in"><option value="fabric">Fabric</option><option value="quilt">Quilt</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option></select></div>' +
+    '<div class="field" style="flex:1;min-width:160px"><label for="ownVer">Yükleyici sürümü (isteğe bağlı)</label><input id="ownVer" class="in" placeholder="otomatik" autocomplete="off"></div></div>' +
+    '<div><button class="btn primary lg" id="ownGo">' + kz.ic('box', 18) + 'Kodu üret</button></div><div class="err" id="ownErr" aria-live="polite"></div></div><div id="ownOut" style="display:flex;flex-direction:column;gap:16px"></div></div>';
+  $('#jmSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-jm]'); if (!b) return; joinMode = b.dataset.jm;
+    $$('#jmSeg button').forEach(function (x) { x.setAttribute('aria-pressed', x === b); });
+    ['inv', 'addr', 'own'].forEach(function (m) { $('#jm-' + m).style.display = joinMode === m ? 'flex' : 'none'; });
+    if (joinMode === 'own') ownInit();
+  });
   $('#queryBtn').addEventListener('click', function () {
     var b = $('#queryBtn'); b.disabled = true; $('#joinErr').textContent = ''; $('#joinOut').innerHTML = '';
     inv('join_prepare', { invite: $('#joinIn').value.trim() }).then(renderJoin)
@@ -204,21 +264,23 @@
   function renderJoin(v) {
     var rows = v.rows.filter(function (r) { return r.status !== 'ready'; });
     var readyN = v.rows.length - rows.length;
-    var need = v.is_new || !v.noop;
+    var need = !v.signed || v.is_new || !v.noop;
     var rowsHtml = rows.map(function (r) {
       var st = ST[r.status] || ST.keep;
       return '<div class="srow"><div><b>' + esc(r.id) + '</b><small class="mono">' + esc(r.version) + '</small></div><span class="pill ' + st[0] + '">' + st[1] + '</span><span class="sz tn">' + (r.size ? mb(r.size) : '') + '</span></div>';
     }).join('');
     $('#joinOut').innerHTML =
       '<div class="card" style="display:flex;flex-direction:column;gap:12px"><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><h2 style="margin:0">' + esc(v.server_name) + '</h2>' +
-      '<span class="pill mute">Minecraft ' + esc(v.game) + '</span><span class="pill mute">' + esc(v.loader) + ' ' + esc(v.loader_version) + '</span><span class="pill mute">' + esc(v.address) + '</span></div>' +
+      '<span class="pill mute">Minecraft ' + esc(v.game) + '</span><span class="pill mute">' + esc(loaderName(v.loader)) + ' ' + esc(v.loader_version) + '</span><span class="pill mute">' + esc(v.address) + '</span></div>' +
       '<p class="hint">Bu server için ayrı bir instance kullanılır; kendi sürümün ve modların etkilenmez.</p></div>' +
       '<div class="card"><h2>Mod karşılaştırması</h2>' + (v.noop ? '<p class="hint">Modların zaten server\'la aynı.</p>' : '<p class="hint">' + readyN + ' mod zaten hazır. Toplam indirme: ' + mb(v.download_bytes) + '</p>') +
       '<div class="sync">' + rowsHtml + '</div></div>' +
       '<div class="card" style="display:flex;flex-direction:column;gap:14px">' +
-      '<div class="callout">' + kz.ic('shield', 20) + '<div>Dosyalar yalnızca Modrinth, CurseForge ya da server sahibinin adresinden gelir ve SHA-512 ile doğrulanır. Manifest server sahibinin anahtarıyla imzalı.' +
-      (v.is_new ? '<br><b>Bu server\'ı ilk kez görüyorsun. İmza parmak izi: <span class="mono">' + esc(v.fingerprint) + '</span></b><br>Bu parmak izini server sahibinden başka bir kanaldan doğrula.' : '') + '</div></div>' +
-      (need ? '<label class="check" for="trust"><input type="checkbox" id="trust"><span>' + (v.is_new ? 'Parmak izini doğruladım ve bu server\'ın modlarına güveniyorum. Modların oyunda kod çalıştırabileceğini biliyorum.' : 'Bu değişiklikleri onaylıyorum. Modlar oyunda kod çalıştırabilir.') + '</span></label>' : '') +
+      '<div class="callout">' + kz.ic('shield', 20) + '<div>' + (v.signed
+        ? 'Dosyalar yalnızca Modrinth, CurseForge ya da server sahibinin adresinden gelir ve SHA-512 ile doğrulanır. Manifest server sahibinin anahtarıyla imzalı.'
+        : 'Dosyalar Modrinth\'ten gelir ve SHA-512 ile doğrulanır. Paket kodu imzasızdır: kodu kimin hazırladığını doğrulayamayız, bu yüzden yalnızca tanıdığın birinden aldıysan devam et.') +
+      (v.signed && v.is_new ? '<br><b>Bu server\'ı ilk kez görüyorsun. İmza parmak izi: <span class="mono">' + esc(v.fingerprint) + '</span></b><br>Bu parmak izini server sahibinden başka bir kanaldan doğrula.' : '') + '</div></div>' +
+      (need ? '<label class="check" for="trust"><input type="checkbox" id="trust"><span>' + (!v.signed ? 'Bu paket koduna güveniyorum. Modların oyunda kod çalıştırabileceğini biliyorum.' : v.is_new ? 'Parmak izini doğruladım ve bu server\'ın modlarına güveniyorum. Modların oyunda kod çalıştırabileceğini biliyorum.' : 'Bu değişiklikleri onaylıyorum. Modlar oyunda kod çalıştırabilir.') + '</span></label>' : '') +
       '<div><button class="btn primary lg" id="syncBtn"' + (need ? ' disabled' : '') + '>' + kz.ic('download', 18) + (v.noop ? 'Katıl' : 'Eşitle ve katıl') + '</button></div></div>';
     var t = $('#trust'); if (t) t.addEventListener('change', function () { $('#syncBtn').disabled = !t.checked; });
     $('#syncBtn').addEventListener('click', function () {
@@ -228,22 +290,88 @@
     });
   }
 
+  /* server sahibi: paket kodu üret */
+  function loadVersionsInto(sel) {
+    var fill = function (l) { sel.innerHTML = l.map(function (v) { return '<option>' + esc(v) + '</option>'; }).join(''); };
+    if (allVersions) return fill(allVersions);
+    inv('get_versions', { snapshots: false }).then(function (l) { allVersions = l; fill(l); }).catch(function (e) { sel.innerHTML = '<option value="">Alınamadı</option>'; $('#ownErr').textContent = errText(e); });
+  }
+  function ownInit() { if ($('#ownGame').options.length <= 1) loadVersionsInto($('#ownGame')); }
+  $('#ownGo').addEventListener('click', function () {
+    var b = $('#ownGo'); b.disabled = true; $('#ownErr').textContent = ''; $('#ownOut').innerHTML = ''; b.lastChild.textContent = 'Üretiliyor...';
+    inv('make_pack', { path: $('#ownPath').value.trim(), name: $('#ownName').value.trim(), address: $('#ownAddr').value.trim(), game: $('#ownGame').value, loader: $('#ownLoader').value, version: $('#ownVer').value.trim() || null })
+      .then(function (r) {
+        $('#ownOut').innerHTML = '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Paket kodun hazır</h2>' +
+          '<p>' + r.included + ' mod koda girdi.</p><textarea id="ownCode" class="in mono" rows="4" readonly></textarea>' +
+          '<div><button class="btn primary" id="ownCopy">' + kz.ic('copy', 16) + 'Kodu kopyala</button></div>' +
+          (r.missing.length ? '<div class="callout">' + kz.ic('shield', 20) + '<div><b>Modrinth\'te bulunamadı, oyuncular bunları elle eklemeli:</b><br>' + r.missing.map(esc).join(', ') + '</div></div>' : '') +
+          (r.skipped_server_only.length ? '<p class="hint">Yalnızca server\'da çalıştığı için koda girmedi: ' + r.skipped_server_only.map(esc).join(', ') + '</p>' : '') +
+          '<p class="hint">Kodu kimden aldığını oyuncuların bilmesi önemli: kod imzasız olduğu için yalnızca tanıdıkların arasında paylaş.</p></div>';
+        $('#ownCode').value = r.code;
+        $('#ownCopy').addEventListener('click', function () {
+          var t = $('#ownCode'); t.select();
+          (navigator.clipboard ? navigator.clipboard.writeText(t.value) : Promise.reject()).then(function () { toast('Kod kopyalandı'); }).catch(function () { toast('Kopyalanamadı, kodu elle seçip kopyala'); });
+        });
+      })
+      .catch(function (e) { $('#ownErr').textContent = errText(e); })
+      .then(function () { b.disabled = false; b.lastChild.textContent = 'Kodu üret'; });
+  });
+
+  /* adresle bağlanma */
+  $('#probeBtn').addEventListener('click', function () {
+    var b = $('#probeBtn'); b.disabled = true; $('#addrErr').textContent = ''; $('#addrOut').innerHTML = '';
+    var addr = $('#addrIn').value.trim();
+    var vers = allVersions ? Promise.resolve(allVersions) : inv('get_versions', { snapshots: false }).then(function (l) { allVersions = l; return l; });
+    Promise.all([inv('probe_server', { address: addr }), vers]).then(function (r) { renderProbe(addr, r[0], r[1]); })
+      .catch(function (e) { $('#addrErr').textContent = errText(e); })
+      .then(function () { b.disabled = false; });
+  });
+  function renderProbe(addr, p, versions) {
+    var game = p.guessed_game || versions[0], loader = p.loader_hint === 'forge' ? 'forge' : 'vanilla';
+    var opts = versions.map(function (v) { return '<option' + (v === game ? ' selected' : '') + '>' + esc(v) + '</option>'; }).join('');
+    $('#addrOut').innerHTML =
+      '<div class="card" style="display:flex;flex-direction:column;gap:10px"><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><h2 style="margin:0">' + esc(p.host + (p.port === 25565 ? '' : ':' + p.port)) + '</h2>' +
+      (p.online ? '<span class="pill good"><i class="dot"></i>Yanıt veriyor</span>' : '<span class="pill warn">Ulaşılamadı</span>') +
+      (p.version_name ? '<span class="pill mute">' + esc(p.version_name) + '</span>' : '') + (p.players ? '<span class="pill mute">' + esc(p.players) + ' oyuncu</span>' : '') +
+      (p.loader_hint === 'forge' ? '<span class="pill acc">Forge / NeoForge modları var</span>' : '') + '</div>' +
+      (p.motd ? '<p class="hint">' + esc(p.motd) + '</p>' : '') + (p.note ? '<p>' + esc(p.note) + '</p>' : '') +
+      (p.existing ? '<p class="hint">Bu adres için daha önce bir instance oluşturulmuş. Seçimi değiştirirsen güncellenir.</p>' : '') + '</div>' +
+      '<div class="card" style="display:flex;flex-direction:column;gap:14px"><h2 style="margin:0">Nasıl bağlanılsın?</h2>' +
+      '<div class="field"><label for="acGame">Minecraft sürümü</label><select id="acGame" class="in">' + opts + '</select></div>' +
+      '<div class="field"><label for="acLoader">Mod yükleyici</label><select id="acLoader" class="in">' + loaderOptions(loader) + '</select>' +
+      '<span class="hint">Server mod kullanıyorsa onun yükleyicisini seç. Fabric/Quilt server\'lar kendini duyurmaz, sahibinden öğren.</span></div>' +
+      '<div class="callout">' + kz.ic('shield', 20) + '<div>Çevrimdışı hesapla yalnızca "cracked" (çevrimdışı mod) açık server\'lara girilir. Aternos\'ta bunu server sahibi <b>Cracked</b> ayarından açar. Premium server\'lar için Microsoft girişi gerekir, o henüz etkin değil.</div></div>' +
+      '<div class="callout">' + kz.ic('refresh', 20) + '<div><b>Modları otomatik eşitlemek için</b> server sahibinden bir <b>paket kodu</b> iste ve soldaki "Davet / paket kodu" sekmesine yapıştır. Kod yoksa modları elle ekleyebilirsin: "Instance\'ı hazırla"ya bas, <b>Mod gezgini</b>\'nden bu instance\'ı seçip ekle, sonra bağlan.</div></div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" id="acPrep">' + kz.ic('box', 18) + 'Instance\'ı hazırla</button><button class="btn primary lg" id="acGo">' + kz.ic('play', 18) + 'Bağlan</button></div><div class="err" id="acErr" aria-live="polite"></div></div>';
+    var args = function () { return { address: addr, game: $('#acGame').value, loader: $('#acLoader').value, version: null }; };
+    $('#acPrep').addEventListener('click', function () {
+      var b = $('#acPrep'); b.disabled = true; $('#acErr').textContent = '';
+      inv('connect_prepare', args()).then(function (i) { toast('Instance hazır: ' + i.name); return refresh(); })
+        .catch(function (e) { $('#acErr').textContent = errText(e); }).then(function () { b.disabled = false; });
+    });
+    $('#acGo').addEventListener('click', function () {
+      if (!cfg.player) { openLogin(); toast('Önce oyuncu adını belirle'); return; }
+      $('#acErr').textContent = ''; openLaunch(p.host);
+      inv('connect_launch', args()).catch(launchFail);
+    });
+  }
+
   /* ---------- mod gezgini ---------- */
   var CATS = [['', 'Tümü'], ['optimization', 'Performans'], ['technology', 'Teknoloji'], ['adventure', 'Macera'], ['decoration', 'Dekorasyon'], ['utility', 'Araçlar'], ['library', 'Kütüphane'], ['worldgen', 'Dünya üretimi']];
   var cat = '', modTarget = '', added = {}, modsLoaded = false;
-  function fabricInstances() { return instances.filter(function (i) { return i.loader === 'fabric' && i.kind === 'player'; }); }
+  function modInstances() { return instances.filter(function (i) { return i.loader !== 'vanilla' && !i.managed; }); }
   function renderModsShell() {
-    var fi = fabricInstances();
+    var fi = modInstances();
     if (!fi.some(function (i) { return i.id === modTarget; })) modTarget = fi.length ? fi[0].id : '';
     if (!fi.length) {
-      $('#v-mods').innerHTML = '<div class="ph"><div><h1>Mod gezgini</h1></div></div><div class="card view-note"><h2>Önce Fabric\'li bir instance gerek</h2><p style="margin:8px 0 14px;color:var(--ink-2)">Modlar Fabric yükleyicisiyle çalışır. Yeni instance oluştururken "Fabric kur"u işaretle.</p><button class="btn primary" data-newinst="1">' + kz.ic('plus', 18) + 'Instance oluştur</button></div>';
+      $('#v-mods').innerHTML = '<div class="ph"><div><h1>Mod gezgini</h1></div></div><div class="card view-note"><h2>Önce modlu bir instance gerek</h2><p style="margin:8px 0 14px;color:var(--ink-2)">Modlar bir yükleyiciyle çalışır: Fabric, Quilt, Forge ya da NeoForge. Yeni instance oluştururken bir yükleyici seç.</p><button class="btn primary" data-newinst="1">' + kz.ic('plus', 18) + 'Instance oluştur</button></div>';
       return;
     }
     $('#v-mods').innerHTML =
-      '<div class="ph"><div><h1>Mod gezgini</h1><p>Modrinth kataloğunda ara. Seçtiğin instance\'ın sürümüne uyan en yeni dosya ve gerekli bağımlılıkları eklenir.</p></div></div>' +
+      '<div class="ph"><div><h1>Mod gezgini</h1><p>Modrinth kataloğunda ara. Seçtiğin instance\'ın Minecraft sürümüne ve yükleyicisine (Fabric, Quilt, Forge, NeoForge) uyan en yeni dosya ve gerekli bağımlılıkları eklenir.</p></div></div>' +
       '<div class="card" style="display:flex;flex-direction:column;gap:14px"><div class="joinbar"><input id="modQ" class="in" style="font-family:var(--font-body)" placeholder="Mod ara, örn. sodium" aria-label="Mod ara"><button class="btn primary" id="modGo">' + kz.ic('refresh', 18) + 'Ara</button></div>' +
       '<div class="chips" id="catChips" role="group" aria-label="Kategori">' + CATS.map(function (c) { return '<button class="chip" aria-pressed="' + (c[0] === cat) + '" data-c="' + c[0] + '">' + c[1] + '</button>'; }).join('') + '</div>' +
-      '<div class="field"><label for="modInst">Eklenecek instance</label><select id="modInst" class="in">' + fi.map(function (i) { return '<option value="' + esc(i.id) + '"' + (i.id === modTarget ? ' selected' : '') + '>' + esc(i.name) + ' (' + esc(i.game) + ')</option>'; }).join('') + '</select></div>' +
+      '<div class="field"><label for="modInst">Eklenecek instance</label><select id="modInst" class="in">' + fi.map(function (i) { return '<option value="' + esc(i.id) + '"' + (i.id === modTarget ? ' selected' : '') + '>' + esc(i.name) + ' (' + esc(i.game) + ' · ' + esc(loaderName(i.loader)) + ')</option>'; }).join('') + '</select></div>' +
       '<div class="err" id="modErr" aria-live="polite"></div></div><div class="mods" id="modList"></div>';
     $('#modGo').addEventListener('click', searchMods);
     $('#modQ').addEventListener('keydown', function (e) { if (e.key === 'Enter') searchMods(); });
@@ -278,6 +406,8 @@
 
   /* ---------- ortak tıklamalar ---------- */
   $('#main').addEventListener('click', function (e) {
+    var d = e.target.closest('[data-del]'); if (d) { openDelete(d.dataset.del); return; }
+    var rs = e.target.closest('[data-resync]'); if (rs) { resync(rs.dataset.resync); return; }
     var p = e.target.closest('[data-play]'); if (p) { play(p.dataset.play); return; }
     if (e.target.closest('[data-newinst]')) { openNew(); return; }
     var a = e.target.closest('[data-add]'); if (a) { addMod(a); }

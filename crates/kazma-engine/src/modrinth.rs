@@ -3,11 +3,11 @@
 
 use crate::net::*;
 use crate::report::Reporter;
-use kazma_core::manifest::{safe_file_name, url_trusted};
+use kazma_core::manifest::{safe_file_name, url_trusted, ModEntry, Side};
 use kazma_core::verify::verify_sha512;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use url::Url;
 
@@ -93,15 +93,13 @@ pub fn versions_url(project: &str, game: &str, loader: &str) -> R<String> {
     .map_err(|e| e.to_string())
 }
 
-/// Sürüm listesinin (en yeni önce) ilk elemanının birincil dosyası. Uygun sürüm yoksa None.
-pub fn parse_best_version(project: &str, json: &str) -> R<Option<ModFileInfo>> {
-    let v: Value = serde_json::from_str(json).map_err(|e| format!("Modrinth yanıtı okunamadı: {e}"))?;
-    let Some(first) = v.as_array().and_then(|a| a.first()) else { return Ok(None) };
-    let files = first.get("files").and_then(Value::as_array).ok_or("sürümde dosya yok")?;
+/// Bir sürüm nesnesinin birincil dosyası: (dosya adı, adres, sha512, boyut). Her alan doğrulanır.
+fn file_from_version(v: &Value) -> R<(String, String, String, u64)> {
+    let files = v.get("files").and_then(Value::as_array).ok_or("sürümde dosya yok")?;
     let f = files.iter().find(|f| f.get("primary").and_then(Value::as_bool) == Some(true)).or_else(|| files.first()).ok_or("sürümde dosya yok")?;
     let get = |k: &str| f.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let (filename, url) = (get("filename"), get("url"));
-    let sha512 = f.pointer("/hashes/sha512").and_then(Value::as_str).unwrap_or("").to_string();
+    let sha512 = f.pointer("/hashes/sha512").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
     if !safe_file_name(&filename) {
         return Err(format!("güvensiz dosya adı: {filename}"));
     }
@@ -111,6 +109,14 @@ pub fn parse_best_version(project: &str, json: &str) -> R<Option<ModFileInfo>> {
     if sha512.len() != 128 || !sha512.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Modrinth dosyasında SHA-512 özeti yok".into());
     }
+    Ok((filename, url, sha512, f.get("size").and_then(Value::as_u64).unwrap_or(0)))
+}
+
+/// Sürüm listesinin (en yeni önce) ilk elemanının birincil dosyası. Uygun sürüm yoksa None.
+pub fn parse_best_version(project: &str, json: &str) -> R<Option<ModFileInfo>> {
+    let v: Value = serde_json::from_str(json).map_err(|e| format!("Modrinth yanıtı okunamadı: {e}"))?;
+    let Some(first) = v.as_array().and_then(|a| a.first()) else { return Ok(None) };
+    let (filename, url, sha512, _) = file_from_version(first)?;
     let deps = first
         .get("dependencies")
         .and_then(Value::as_array)
@@ -127,9 +133,67 @@ pub fn parse_best_version(project: &str, json: &str) -> R<Option<ModFileInfo>> {
         version_number: first.get("version_number").and_then(Value::as_str).unwrap_or("").to_string(),
         filename,
         url,
-        sha512: sha512.to_ascii_lowercase(),
+        sha512,
         deps,
     }))
+}
+
+// ---------- paket kodu için toplu sorgular ----------
+
+pub fn versions_batch_url(ids: &[String]) -> R<String> {
+    if ids.is_empty() || ids.iter().any(|i| !token_ok(i)) {
+        return Err("sürüm kimliği geçersiz".into());
+    }
+    let list = serde_json::to_string(ids).map_err(|e| e.to_string())?;
+    Url::parse_with_params("https://api.modrinth.com/v2/versions", [("ids", list)]).map(|u| u.to_string()).map_err(|e| e.to_string())
+}
+
+/// `wanted` sırasıyla mod kayıtları. İstenen sürümlerden biri bulunamazsa hepsi listelenerek hata verilir.
+pub fn parse_versions_batch(json: &str, wanted: &[String]) -> R<Vec<ModEntry>> {
+    let v: Value = serde_json::from_str(json).map_err(|e| format!("Modrinth yanıtı okunamadı: {e}"))?;
+    let arr = v.as_array().ok_or("Modrinth yanıtı beklenen biçimde değil")?;
+    let by_id: HashMap<&str, &Value> = arr.iter().filter_map(|x| x.get("id").and_then(Value::as_str).map(|i| (i, x))).collect();
+    let (mut out, mut missing) = (Vec::new(), Vec::new());
+    for id in wanted {
+        let Some(ver) = by_id.get(id.as_str()) else {
+            missing.push(id.clone());
+            continue;
+        };
+        let (file, url, sha512, size) = file_from_version(ver)?;
+        let project = ver.get("project_id").and_then(Value::as_str).filter(|p| token_ok(p)).ok_or("sürümde proje kimliği yok")?;
+        out.push(ModEntry { id: project.into(), version: ver.get("version_number").and_then(Value::as_str).unwrap_or("").into(), file, sha512, url, side: Side::Both, size });
+    }
+    if !missing.is_empty() {
+        return Err(format!("Modrinth'te bulunamayan sürümler: {}. Paket kodu eskimiş ya da bozuk olabilir.", missing.join(", ")));
+    }
+    Ok(out)
+}
+
+/// Dosya özetlerinden Modrinth sürüm kimliklerini bulma: yanıt `{ özet: sürüm nesnesi }`.
+pub fn parse_version_files(json: &str) -> R<HashMap<String, String>> {
+    let v: Value = serde_json::from_str(json).map_err(|e| format!("Modrinth yanıtı okunamadı: {e}"))?;
+    let o = v.as_object().ok_or("Modrinth yanıtı beklenen biçimde değil")?;
+    Ok(o.iter().filter_map(|(h, ver)| ver.get("id").and_then(Value::as_str).filter(|i| token_ok(i)).map(|i| (h.to_ascii_lowercase(), i.to_string()))).collect())
+}
+
+pub fn lookup_hashes_live(hashes: &[String]) -> R<HashMap<String, String>> {
+    let mut out = HashMap::new();
+    for chunk in hashes.chunks(100) {
+        let body = serde_json::json!({ "hashes": chunk, "algorithm": "sha512" }).to_string();
+        let resp = agent().post("https://api.modrinth.com/v2/version_files").set("Content-Type", "application/json").send_string(&body).map_err(|e| format!("Modrinth sorgusu başarısız: {e}"))?;
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut std::io::Read::take(resp.into_reader(), 8 << 20), &mut text).map_err(|e| e.to_string())?;
+        out.extend(parse_version_files(&text)?);
+    }
+    Ok(out)
+}
+
+pub fn resolve_pack_live(ids: &[String]) -> R<Vec<ModEntry>> {
+    let mut out = Vec::new();
+    for chunk in ids.chunks(50) {
+        out.extend(parse_versions_batch(&get_text(&versions_batch_url(chunk)?, 8 << 20)?, chunk)?);
+    }
+    Ok(out)
 }
 
 /// Bir modu ve gerekli bağımlılıklarını `mods_dir`'e kurar. Dönen liste yeni yazılan dosyalardır.
@@ -247,6 +311,31 @@ mod tests {
         assert!(parse_best_version("p", &evil_name).is_err());
         let no_hash = ok.replace(&sha512_hex(b"x"), "zz");
         assert!(parse_best_version("p", &no_hash).is_err());
+    }
+
+    #[test]
+    fn batch_versions_become_entries() {
+        let v = |id: &str, proj: &str, file: &str, data: &[u8]| format!(r#"{{"id":"{id}","project_id":"{proj}","version_number":"1.0","files":[{{"hashes":{{"sha512":"{}"}},"url":"https://cdn.modrinth.com/data/{proj}/{file}","filename":"{file}","primary":true,"size":{}}}]}}"#, sha512_hex(data), data.len());
+        let json = format!("[{},{}]", v("v2", "pB", "b.jar", b"b"), v("v1", "pA", "a.jar", b"a"));
+        let wanted = vec!["v1".to_string(), "v2".to_string()];
+        let e = parse_versions_batch(&json, &wanted).unwrap();
+        assert_eq!(e.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["pA", "pB"], "istenen sırayla");
+        assert_eq!(e[0].sha512, sha512_hex(b"a"));
+        let miss = parse_versions_batch(&json, &["v1".into(), "v9".into(), "v8".into()]).unwrap_err();
+        assert!(miss.contains("v9") && miss.contains("v8"));
+        assert!(parse_versions_batch(&json.replace("cdn.modrinth.com", "evil.example"), &wanted).is_err());
+        let u = versions_batch_url(&wanted).unwrap();
+        assert!(u.starts_with("https://api.modrinth.com/v2/versions?ids=%5B%22v1%22%2C%22v2%22%5D"));
+        assert!(versions_batch_url(&["../x".to_string()]).is_err());
+        assert!(versions_batch_url(&[]).is_err());
+    }
+
+    #[test]
+    fn hash_lookup_response() {
+        let m = parse_version_files(r#"{"ABCDEF":{"id":"v1","project_id":"p"},"123":{"id":"../x"}}"#).unwrap();
+        assert_eq!(m.get("abcdef").map(String::as_str), Some("v1"), "özet küçük harfe çevrilir");
+        assert_eq!(m.len(), 1, "geçersiz kimlik atılır");
+        assert!(parse_version_files("[]").is_err());
     }
 
     #[test]

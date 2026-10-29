@@ -2,6 +2,7 @@
 
 use crate::net::*;
 use crate::report::Reporter;
+use crate::loaders;
 use kazma_core::instance::{InstanceSpec, LoaderSpec};
 use kazma_core::launch::{build_args, Account, Dirs, LaunchOptions};
 use kazma_core::plan::{asset_items, build_plan, game_url_trusted, NativeJar, Plan};
@@ -37,8 +38,8 @@ fn fetch_version_json(root: &Path, id: &str, manifest: &mojang::VersionManifest)
     version::parse(&text).map_err(|e| e.to_string())
 }
 
-/// Belirli bir Fabric yükleyici sürümü değişmez; bir kez indirilince diskten okunur.
-fn fabric_profile(root: &Path, spec: &InstanceSpec, loader: &str) -> R<VersionJson> {
+/// Belirli bir Fabric/Quilt yükleyici sürümünün profili değişmez; bir kez indirilince diskten okunur.
+fn profile_json(root: &Path, spec: &InstanceSpec) -> R<VersionJson> {
     let id = spec.version_id();
     let path = root.join("versions").join(&id).join(format!("{id}.json"));
     if let Ok(t) = fs::read_to_string(&path) {
@@ -48,27 +49,24 @@ fn fabric_profile(root: &Path, spec: &InstanceSpec, loader: &str) -> R<VersionJs
             }
         }
     }
-    let url = mojang::fabric_profile_url(&spec.game, loader).map_err(|e| e.to_string())?;
-    let text = get_text(&url, 5 << 20).map_err(|e| format!("{e}\nBu Minecraft sürümü için Fabric {loader} yok olabilir"))?;
+    let url = match &spec.loader {
+        LoaderSpec::Fabric { version } => mojang::fabric_profile_url(&spec.game, version),
+        LoaderSpec::Quilt { version } => mojang::quilt_profile_url(&spec.game, version),
+        _ => return Err("bu yükleyici profil dosyasıyla kurulmaz".into()),
+    }
+    .map_err(|e| e.to_string())?;
+    let text = get_text(&url, 5 << 20).map_err(|e| format!("{e}\nBu Minecraft sürümü için {} {} yok olabilir", spec.loader.kind(), spec.loader.version()))?;
     let parsed = version::parse(&text).map_err(|e| e.to_string())?;
     if parsed.id != id {
-        return Err(format!("Fabric profili beklenen kimlikte değil ({} ≠ {id})", parsed.id));
+        return Err(format!("yükleyici profili beklenen kimlikte değil ({} ≠ {id})", parsed.id));
     }
     write_atomic(&path, text.as_bytes())?;
     Ok(parsed)
 }
 
-pub fn latest_stable_fabric(game: &str) -> R<String> {
-    let url = format!("https://meta.fabricmc.net/v2/versions/loader/{game}");
-    if mojang::fabric_profile_url(game, "0").is_err() {
-        return Err("sürüm adı geçersiz".into());
-    }
-    let v: serde_json::Value = serde_json::from_str(&get_text(&url, 5 << 20)?).map_err(|e| e.to_string())?;
-    v.as_array()
-        .and_then(|a| a.iter().find(|e| e.pointer("/loader/stable").and_then(|s| s.as_bool()) == Some(true)))
-        .and_then(|e| e.pointer("/loader/version").and_then(|s| s.as_str()))
-        .map(String::from)
-        .ok_or_else(|| format!("{game} için kararlı Fabric sürümü bulunamadı"))
+/// Seçilen yükleyicinin, verilen Minecraft sürümü için en uygun sürümü (ağdan).
+pub fn latest_loader(kind: &str, game: &str) -> R<String> {
+    loaders::latest_version(kind, game, &|u| get_text(u, 8 << 20))
 }
 
 pub fn list_versions(snapshots: bool) -> R<Vec<String>> {
@@ -76,13 +74,72 @@ pub fn list_versions(snapshots: bool) -> R<Vec<String>> {
     Ok(m.versions(snapshots).iter().map(|v| v.id.clone()).collect())
 }
 
-pub fn ensure_installed(root: &Path, spec: &InstanceSpec, env: &Env, rep: &dyn Reporter) -> R<Installed> {
+fn sha1_from_text(t: &str) -> Option<String> {
+    let w = t.split_whitespace().next()?;
+    (w.len() == 40 && w.bytes().all(|b| b.is_ascii_hexdigit())).then(|| w.to_ascii_lowercase())
+}
+
+/// Forge ve NeoForge: resmi kurucuyu indirir (SHA-1 ile doğrular) ve `--installClient` ile çalıştırır.
+/// Kurucu `versions/<kimlik>/<kimlik>.json` dosyasını ve kütüphaneleri üretir; sonra normal akış devam eder.
+fn run_loader_installer(root: &Path, spec: &InstanceSpec, base: &VersionJson, env: &Env, java: &Option<PathBuf>, rep: &dyn Reporter) -> R<String> {
+    let expected = spec.version_id();
+    let json_of = |id: &str| root.join("versions").join(id).join(format!("{id}.json"));
+    if json_of(&expected).is_file() {
+        return Ok(expected);
+    }
+    let kind = spec.loader.kind();
+    let (jar_url, sha_url) = loaders::installer_urls(kind, &spec.game, spec.loader.version())?;
+    rep.stage(&format!("{kind} kurucusu indiriliyor"));
+    let jar = get_bytes(&jar_url, 200 << 20)?;
+    let want = sha1_from_text(&get_text(&sha_url, 4096)?).ok_or("kurucunun SHA-1 özeti okunamadı")?;
+    if !sha1_hex(&jar).eq_ignore_ascii_case(&want) {
+        return Err("kurucunun SHA-1 özeti uyuşmuyor, çalıştırılmadı".into());
+    }
+    let dir = root.join("installers");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let jar_path = dir.join(format!("{kind}-{}-{}.jar", spec.game, spec.loader.version()));
+    fs::write(&jar_path, &jar).map_err(|e| e.to_string())?;
+    let profiles = root.join("launcher_profiles.json");
+    if !profiles.is_file() {
+        write_atomic(&profiles, br#"{"profiles":{},"settings":{},"version":3}"#)?;
+    }
+    let java_exe = ensure_java(root, base.java_version.as_ref().map(|j| j.major_version).unwrap_or(17), env, java, rep)?;
+    let before: std::collections::HashSet<String> = fs::read_dir(root.join("versions")).map(|r| r.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    rep.stage(&format!("{kind} kuruluyor (birkaç dakika sürebilir)"));
+    let log = dir.join("last.log");
+    let out = fs::File::create(&log).map_err(|e| e.to_string())?;
+    let err = out.try_clone().map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(&java_exe);
+    cmd.arg("-jar").arg(&jar_path).arg("--installClient").arg(root).current_dir(root).stdout(out).stderr(err);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let status = cmd.status().map_err(|e| format!("{}: {e}", java_exe.display()))?;
+    if json_of(&expected).is_file() {
+        return Ok(expected);
+    }
+    // Kurucu beklenenden farklı bir kimlikle kurmuş olabilir: yeni oluşan sürüm klasörünü bul.
+    let after: Vec<String> = fs::read_dir(root.join("versions")).map(|r| r.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    if let Some(id) = after.into_iter().find(|n| !before.contains(n) && json_of(n).is_file() && n.contains(spec.loader.version())) {
+        return Ok(id);
+    }
+    Err(format!("{kind} kurulamadı (çıkış kodu {}). Günlük: {}", status.code().unwrap_or(-1), log.display()))
+}
+
+pub fn ensure_installed(root: &Path, spec: &InstanceSpec, env: &Env, java: &Option<PathBuf>, rep: &dyn Reporter) -> R<Installed> {
     rep.stage("Mojang sürüm listesi alınıyor");
     let manifest = mojang::parse_manifest(&get_text(mojang::VERSION_MANIFEST_URL, 20 << 20)?).map_err(|e| e.to_string())?;
     let base = fetch_version_json(root, &spec.game, &manifest)?;
     let resolved = match &spec.loader {
         LoaderSpec::Vanilla => version::resolve(base, None),
-        LoaderSpec::Fabric { version } => version::resolve(fabric_profile(root, spec, version)?, Some(base)),
+        LoaderSpec::Fabric { .. } | LoaderSpec::Quilt { .. } => version::resolve(profile_json(root, spec)?, Some(base)),
+        LoaderSpec::Forge { .. } | LoaderSpec::NeoForge { .. } => {
+            let id = run_loader_installer(root, spec, &base, env, java, rep)?;
+            let t = fs::read_to_string(root.join("versions").join(&id).join(format!("{id}.json"))).map_err(|e| e.to_string())?;
+            version::resolve(version::parse(&t).map_err(|e| e.to_string())?, Some(base))
+        }
     }
     .map_err(|e| e.to_string())?;
     let plan = build_plan(&resolved, env).map_err(|e| e.to_string())?;

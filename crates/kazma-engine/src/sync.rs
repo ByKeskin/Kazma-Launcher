@@ -3,20 +3,23 @@
 
 use crate::net::*;
 use kazma_core::manifest::{safe_file_name, LocalMod, ModEntry, PackManifest, SyncPlan};
-use kazma_core::modjar::{parse_fabric_mod_json, to_local, ModMeta};
+use kazma_core::modjar::{identify, to_local, ModMeta};
 use kazma_core::trust::TrustStore;
 use kazma_core::verify::{sha512_hex, verify_sha512};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
 
-/// Jar içindeki `fabric.mod.json`'ı okur; yoksa ya da bozuksa None.
+/// Jar içindeki üst veriyi (Fabric, Quilt, Forge, NeoForge) okur; tanınmazsa None.
 pub fn read_mod_meta(jar: &[u8]) -> Option<ModMeta> {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(jar)).ok()?;
-    let f = z.by_name("fabric.mod.json").ok()?;
-    let mut s = String::new();
-    f.take(2 << 20).read_to_string(&mut s).ok()?;
-    parse_fabric_mod_json(&s).ok()
+    let z = std::cell::RefCell::new(zip::ZipArchive::new(std::io::Cursor::new(jar)).ok()?);
+    identify(&|name: &str| {
+        let mut z = z.borrow_mut();
+        let f = z.by_name(name).ok()?;
+        let mut s = String::new();
+        f.take(2 << 20).read_to_string(&mut s).ok()?;
+        Some(s)
+    })
 }
 
 pub fn scan_mods(mods_dir: &Path) -> R<Vec<LocalMod>> {
@@ -150,6 +153,27 @@ mod tests {
 
     fn manifest(mods: Vec<ModEntry>) -> PackManifest {
         PackManifest { name: "S".into(), game: "1.21.1".into(), loader: Loader { kind: "fabric".into(), version: "0.16.9".into() }, mods, signer: None, signature: None }
+    }
+
+    #[test]
+    fn reads_forge_neoforge_and_quilt_mods() {
+        let mk = |entries: &[(&str, &str)]| {
+            let mut buf = Vec::new();
+            {
+                let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+                let o = zip::write::SimpleFileOptions::default();
+                for (n, b) in entries {
+                    w.start_file(*n, o).unwrap();
+                    w.write_all(b.as_bytes()).unwrap();
+                }
+                w.finish().unwrap();
+            }
+            buf
+        };
+        assert_eq!(read_mod_meta(&mk(&[("META-INF/mods.toml", "[[mods]]\nmodId=\"create\"\n")])).unwrap().id, "create");
+        assert_eq!(read_mod_meta(&mk(&[("META-INF/neoforge.mods.toml", "[[mods]]\nmodId=\"mekanism\"\n")])).unwrap().id, "mekanism");
+        assert_eq!(read_mod_meta(&mk(&[("quilt.mod.json", r#"{"quilt_loader":{"id":"qfapi"}}"#)])).unwrap().id, "qfapi");
+        assert!(read_mod_meta(&mk(&[("readme.txt", "x")])).is_none());
     }
 
     #[test]

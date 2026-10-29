@@ -41,6 +41,35 @@ Dosyalar `%APPDATA%\.kazma` altına yazılır (`--root` ile değişir). Java'yı
 
 Alternatif (çevrimdışı) hesapla yalnızca `online-mode=false` server'lara ve tek kişilik dünyaya girilebilir.
 
+## Desteklenen yükleyiciler
+
+| Yükleyici | Kurulum | Not |
+|---|---|---|
+| Vanilla | Mojang dosyaları | tüm sürümler |
+| Fabric | meta.fabricmc.net profili | |
+| Quilt | meta.quiltmc.org profili | |
+| Forge | resmi kurucu (`--installClient`), SHA-1 doğrulamalı | 1.13 ve sonrası; ilk kurulum birkaç dakika sürer |
+| NeoForge | resmi kurucu, SHA-1 doğrulamalı | yalnızca 1.20.2 ve sonrası |
+
+Forge/NeoForge kurucuları bu geliştirme ortamında canlı denenemedi; ilk gerçek kurulumda hata çıkarsa
+`<kök>\installers\last.log` dosyasına bakın.
+
+## Aternos ve davetsiz server'lar
+
+Arayüzde **Server'a Katıl → Sunucu adresi**: Kazma server'a Minecraft'ın "Server List Ping" protokolüyle sorar,
+sürümünü ve Forge ipucunu bulur, o server için ayrı bir instance açar. Modları oyuncu Mod Gezgini'nden kendisi ekler.
+Çevrimdışı hesapla yalnızca "cracked" açık server'lara girilir (Aternos'ta server sahibi açar).
+Server sahibi isterse `kazma-cli make-manifest` ile mod listesini yayınlayıp **davet bağlantısıyla** otomatik eşitleme sağlar.
+
+## Paket kodu (barındırma gerektirmeyen otomatik eşitleme)
+
+Aternos gibi mod listesi yayınlamayan server'lar için: server sahibi mods klasöründen **paket kodu** üretir
+(arayüzde *Server'a Katıl → Server sahibi*, ya da `kazma-cli make-code ... --mods KLASÖR`). Kod yalnızca
+Modrinth sürüm kimliklerini taşır (60 mod ≈ 1 KB). Oyuncu kodu *Davet / paket kodu* alanına yapıştırınca Kazma
+server'ın sürümünü kurar, modları Modrinth'ten indirip SHA-512 ile doğrular ve bağlanır. Kod imzasızdır;
+bu yüzden arayüz her seferinde onay ister. Modrinth'te olmayan modlar koda girmez, ayrıca listelenir.
+Sahibi isterse imzalı manifest + davet bağlantısı yolunu da kullanabilir (aşağıda).
+
 ## Sürüm seçimi
 
 ```
@@ -48,6 +77,8 @@ kazma-cli versions [--snapshots]                 # seçilebilir sürümler
 kazma-cli launch 1.20.1 Mustafa                  # vanilla
 kazma-cli launch 1.20.1 Mustafa --fabric         # en son kararlı Fabric
 kazma-cli launch 1.20.1 Mustafa --fabric 0.15.11 # belirli Fabric sürümü
+kazma-cli launch 1.20.1 Mustafa --forge          # Forge (ayrıca --quilt, --neoforge)
+kazma-cli launch 1.20.1 Mustafa --forge --join my_world.aternos.me:12345
 ```
 
 Her sürüm ve yükleyici kendi instance'ında çalışır (`instances/<sürüm>-<yükleyici>`).

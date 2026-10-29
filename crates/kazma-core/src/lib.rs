@@ -8,6 +8,7 @@ pub mod java;
 pub mod launch;
 pub mod manifest;
 pub mod modjar;
+pub mod pack;
 pub mod mojang;
 pub mod plan;
 pub mod sign;

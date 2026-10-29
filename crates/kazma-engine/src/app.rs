@@ -4,11 +4,13 @@
 use crate::install::{self, GameExit};
 use crate::net::*;
 use crate::report::Reporter;
-use crate::sync;
+use crate::{modrinth, serverkit, sync};
 use kazma_core::instance::{self, InstanceSpec, LoaderSpec};
+use crate::ping;
 use kazma_core::invite::{self, Invite};
 use kazma_core::launch::{Account, LaunchOptions};
-use kazma_core::manifest::{self, PackManifest, SyncPlan};
+use kazma_core::manifest::{self, Loader, ModEntry, PackManifest, SyncPlan};
+use kazma_core::pack::{self, PackCode};
 use kazma_core::trust::{fingerprint, Pin};
 use kazma_core::version::Env;
 use kazma_core::{account, sign};
@@ -70,7 +72,7 @@ pub struct InstanceInfo {
     pub id: String,
     pub name: String,
     pub game: String,
-    /// "vanilla" ya da "fabric"
+    /// "vanilla", "fabric", "quilt", "forge" ya da "neoforge"
     pub loader: String,
     #[serde(default)]
     pub loader_version: String,
@@ -82,6 +84,12 @@ pub struct InstanceInfo {
     pub server_port: Option<u16>,
     #[serde(default)]
     pub last_played: Option<u64>,
+    /// Modları bir manifest ya da paket kodu yönetiyor (true) ya da oyuncu kendi ekliyor (false).
+    #[serde(default)]
+    pub managed: bool,
+    /// Yönetilen instance'ı güncel tutan davet bağlantısı ya da paket kodu.
+    #[serde(default)]
+    pub source: Option<String>,
     /// Kayıtta tutulmaz, listelerken hesaplanır.
     #[serde(default, skip_deserializing)]
     pub mods: usize,
@@ -122,30 +130,37 @@ pub fn list_instances(root: &Path) -> Vec<InstanceInfo> {
     v
 }
 
+/// Instance klasörünü (dünyalar, ayarlar ve modlar dahil) siler. Geri alınamaz.
+pub fn delete_instance(root: &Path, id: &str) -> R<()> {
+    let info = read_info(root, id)?; // kimliği de doğrular (yol karakteri yok, kayıt var)
+    let dir = root.join("instances").join(&info.id);
+    fs::remove_dir_all(&dir).map_err(|e| format!("Silinemedi ({e}). Oyun açıksa önce kapat."))?;
+    let mut c = load_config(root);
+    if c.last_instance.as_deref() == Some(id) {
+        c.last_instance = None;
+        save_config(root, &c)?;
+    }
+    Ok(())
+}
+
 pub fn spec_of(i: &InstanceInfo) -> R<InstanceSpec> {
-    let loader = match i.loader.as_str() {
-        "vanilla" => LoaderSpec::Vanilla,
-        "fabric" => LoaderSpec::Fabric { version: i.loader_version.clone() },
-        o => return Err(format!("desteklenmeyen yükleyici: {o}")),
-    };
+    let loader = LoaderSpec::from_kind(&i.loader, &i.loader_version).map_err(|e| e.to_string())?;
     Ok(InstanceSpec { id: i.id.clone(), game: i.game.clone(), loader })
 }
 
-fn info_for(spec: &InstanceSpec, name: &str, kind: &str, host: Option<(&str, u16)>) -> InstanceInfo {
-    let (loader, loader_version) = match &spec.loader {
-        LoaderSpec::Vanilla => ("vanilla", String::new()),
-        LoaderSpec::Fabric { version } => ("fabric", version.clone()),
-    };
+fn info_for(spec: &InstanceSpec, name: &str, kind: &str, host: Option<(&str, u16)>, managed: bool) -> InstanceInfo {
     InstanceInfo {
         id: spec.id.clone(),
         name: name.to_string(),
         game: spec.game.clone(),
-        loader: loader.into(),
-        loader_version,
+        loader: spec.loader.kind().into(),
+        loader_version: spec.loader.version().into(),
         kind: kind.into(),
         server_host: host.map(|h| h.0.to_string()),
         server_port: host.map(|h| h.1),
         last_played: None,
+        managed,
+        source: None,
         mods: 0,
     }
 }
@@ -158,21 +173,20 @@ fn clean_name(n: &str) -> R<String> {
     Ok(n.to_string())
 }
 
-/// `fabric`: None = vanilla, Some(None) = en son kararlı Fabric, Some(Some(v)) = belirli sürüm.
-pub fn create_instance(root: &Path, name: &str, game: &str, fabric: Option<Option<String>>) -> R<InstanceInfo> {
+/// `loader_version`: boşsa seçilen yükleyicinin bu Minecraft sürümü için en uygun sürümü ağdan bulunur.
+pub fn create_instance(root: &Path, name: &str, game: &str, loader: &str, loader_version: Option<String>) -> R<InstanceInfo> {
     let name = clean_name(name)?;
-    let loader = match fabric {
-        None => None,
-        Some(Some(v)) => Some(v),
-        Some(None) => Some(install::latest_stable_fabric(game)?),
+    let lv = match (loader, loader_version) {
+        ("vanilla", _) => String::new(),
+        (_, Some(v)) => v,
+        (kind, None) => install::latest_loader(kind, game)?,
     };
-    let spec = instance::from_selection(game, loader.as_deref()).map_err(|e| e.to_string())?;
+    let spec = instance::from_selection(game, loader, &lv).map_err(|e| e.to_string())?;
     if info_path(root, &spec.id).is_file() {
         let ex = read_info(root, &spec.id)?;
         return Err(format!("Bu sürüm için zaten bir instance var: {}", ex.name));
     }
-    let info = info_for(&spec, &name, "player", None);
-    write_info(root, &info)?;
+    write_info(root, &info_for(&spec, &name, "player", None, false))?;
     read_info(root, &spec.id)
 }
 
@@ -199,7 +213,7 @@ pub fn launch_instance(root: &Path, id: &str, java: &Option<PathBuf>, rep: &dyn 
     let info = read_info(root, id)?;
     let spec = spec_of(&info)?;
     let env = Env::current();
-    let inst = install::ensure_installed(root, &spec, &env, rep)?;
+    let inst = install::ensure_installed(root, &spec, &env, java, rep)?;
     let join = match (&info.kind[..], &info.server_host, info.server_port) {
         ("server", Some(h), Some(p)) => Some((h.clone(), p)),
         _ => None,
@@ -207,6 +221,79 @@ pub fn launch_instance(root: &Path, id: &str, java: &Option<PathBuf>, rep: &dyn 
     let opts = LaunchOptions { max_mb: cfg.ram, join_server: join, ..Default::default() };
     mark_played(root, id);
     install::launch_game(root, &spec, &inst, &env, &acct, &opts, java, rep)
+}
+
+// ---------- adresle bağlanma (Aternos vb.) ----------
+
+#[derive(Debug, Serialize)]
+pub struct ProbeView {
+    pub host: String,
+    pub port: u16,
+    pub online: bool,
+    pub version_name: String,
+    pub players: String,
+    pub motd: String,
+    /// Server'ın söylediği sürümden çıkarılan Minecraft sürümü.
+    pub guessed_game: Option<String>,
+    /// "forge" ise server Forge/NeoForge modları kullanıyor olabilir.
+    pub loader_hint: Option<String>,
+    pub note: Option<String>,
+    /// Bu adres için daha önce oluşturulmuş instance.
+    pub existing: Option<String>,
+}
+
+/// Ağ gerektirmeyen kısım: sorgu sonucunu arayüz için yorumlar.
+pub fn probe_with(root: &Path, host: &str, port: u16, available: &[String]) -> ProbeView {
+    let existing = instance::for_server(host, port, "x", "vanilla", "").ok().map(|s| s.id).filter(|id| info_path(root, id).is_file());
+    let mut v = ProbeView { host: host.into(), port, online: false, version_name: String::new(), players: String::new(), motd: String::new(), guessed_game: None, loader_hint: None, note: None, existing };
+    match ping::query(host, port, std::time::Duration::from_secs(5)) {
+        Ok(st) => {
+            v.online = true;
+            v.guessed_game = ping::guess_game_version(&st.version_name, available);
+            let sleeping = st.protocol <= 0 || st.version_name.to_lowercase().contains("offline") || st.motd.to_lowercase().contains("offline");
+            if sleeping || v.guessed_game.is_none() {
+                v.note = Some("Server şu an kapalı, uyuyor ya da sürümünü söylemiyor. Aternos'ta server'ı sahibinin başlatması gerekir. Sürümü elle seçebilirsin.".into());
+            }
+            v.players = format!("{}/{}", st.players_online, st.players_max);
+            v.version_name = st.version_name;
+            v.motd = st.motd;
+            v.loader_hint = st.loader_hint;
+        }
+        Err(e) => v.note = Some(format!("Server'a ulaşılamadı ({e}). Adresi ve portu kontrol et; Aternos'ta server'ın açık olması gerekir. Yine de sürümü elle seçip devam edebilirsin.")),
+    }
+    v
+}
+
+pub fn probe_server(root: &Path, address: &str, rep: &dyn Reporter) -> R<ProbeView> {
+    let inv = invite::parse(address).map_err(|e| e.to_string())?;
+    rep.stage("Server sorgulanıyor");
+    let available = install::list_versions(false).unwrap_or_default();
+    Ok(probe_with(root, &inv.host, inv.port, &available))
+}
+
+/// Davet bağlantısı olmayan bir server için instance oluşturur ya da günceller (modları oyuncu kendisi ekler).
+/// `launch` doğruysa hemen oyunu açıp bağlanır.
+pub fn connect_server(root: &Path, address: &str, game: &str, loader: &str, loader_version: Option<String>, launch: bool, java: &Option<PathBuf>, rep: &dyn Reporter) -> R<(InstanceInfo, Option<GameExit>)> {
+    let inv = invite::parse(address).map_err(|e| e.to_string())?;
+    let lv = match (loader, loader_version) {
+        ("vanilla", _) => String::new(),
+        (_, Some(v)) => v,
+        (kind, None) => {
+            rep.stage("Yükleyici sürümü aranıyor");
+            install::latest_loader(kind, game)?
+        }
+    };
+    let spec = instance::for_server(&inv.host, inv.port, game, loader, &lv).map_err(|e| e.to_string())?;
+    let mut info = info_for(&spec, &inv.address(), "server", Some((&inv.host, inv.port)), false);
+    if let Ok(old) = read_info(root, &spec.id) {
+        info.last_played = old.last_played;
+        info.managed = old.managed && old.game == info.game && old.loader == info.loader;
+        info.name = old.name;
+    }
+    write_info(root, &info)?;
+    let info = read_info(root, &spec.id)?;
+    let exit = if launch { Some(launch_instance(root, &spec.id, java, rep)?) } else { None };
+    Ok((info, exit))
 }
 
 // ---------- server'a katılma ----------
@@ -218,6 +305,10 @@ pub struct Prepared {
     pub key: String,
     pub fingerprint: String,
     pub is_new: bool,
+    /// Manifest imzalı mı (davet bağlantısı) yoksa imzasız paket kodu mu.
+    pub signed: bool,
+    /// Instance'ı güncel tutmak için saklanan davet bağlantısı ya da paket kodu.
+    pub source: String,
     pub spec: InstanceSpec,
     pub plan: SyncPlan,
 }
@@ -239,16 +330,63 @@ pub fn prepare_from_manifest(root: &Path, inv: Invite, m: PackManifest, manifest
     let spec = instance::from_manifest(&m, &inv.host, inv.port).map_err(|e| e.to_string())?;
     let local = sync::scan_mods(&root.join(spec.mods_rel()))?;
     let plan = manifest::plan(&m, &local);
-    Ok(Prepared { fingerprint: fingerprint(&key), invite: inv, manifest: m, key, is_new, spec, plan })
+    Ok(Prepared { fingerprint: fingerprint(&key), invite: inv, manifest: m, key, is_new, signed: true, source: String::new(), spec, plan })
 }
 
-pub fn join_prepare(root: &Path, invite_text: &str, rep: &dyn Reporter) -> R<Prepared> {
-    let inv = invite::parse(invite_text).map_err(|e| e.to_string())?;
-    let murl = inv.manifest_url.clone().ok_or("Davette manifest adresi yok (?m=...). Server sahibinden tam davet bağlantısını iste.")?;
-    rep.stage("Server manifesti alınıyor");
-    let m = sync::fetch_manifest(&murl)?;
-    let host = url::Url::parse(&murl).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_default();
-    prepare_from_manifest(root, inv, m, &host)
+/// Ağ gerektirmeyen kısım: paket kodundaki sürümler çözüldükten sonra plan.
+pub fn prepare_from_pack(root: &Path, pc: &PackCode, entries: Vec<ModEntry>) -> R<Prepared> {
+    if pc.a.is_empty() {
+        return Err("Paket kodunda server adresi yok. Server sahibinden adresli bir kod iste.".into());
+    }
+    let inv = invite::parse(&pc.a).map_err(|e| e.to_string())?;
+    let m = PackManifest { name: pc.n.clone(), game: pc.g.clone(), loader: Loader { kind: pc.l.clone(), version: pc.lv.clone() }, mods: entries, signer: None, signature: None };
+    m.validate_with(&[inv.host.as_str()]).map_err(|e| e.to_string())?;
+    let spec = instance::from_manifest(&m, &inv.host, inv.port).map_err(|e| e.to_string())?;
+    let local = sync::scan_mods(&root.join(spec.mods_rel()))?;
+    let plan = pack::plan_by_hash(&m.mods, &local);
+    Ok(Prepared { invite: inv, manifest: m, key: String::new(), fingerprint: String::new(), is_new: false, signed: false, source: String::new(), spec, plan })
+}
+
+/// Davet bağlantısı (`kazma://join/...?m=`, imzalı manifest) ya da paket kodu (`kazma://pack/...`).
+pub fn join_prepare(root: &Path, text: &str, rep: &dyn Reporter) -> R<Prepared> {
+    let text = text.trim();
+    let mut p = if pack::is_pack_code(text) {
+        let pc = pack::decode(text).map_err(|e| e.to_string())?;
+        rep.stage("Mod listesi Modrinth'ten alınıyor");
+        let entries = modrinth::resolve_pack_live(&pc.m)?;
+        prepare_from_pack(root, &pc, entries)?
+    } else {
+        let inv = invite::parse(text).map_err(|e| e.to_string())?;
+        let murl = inv.manifest_url.clone().ok_or("Bu bağlantıda mod listesi yok. Server sahibinden davet bağlantısı (?m=...) ya da paket kodu (kazma://pack/...) iste. Düz adresle bağlanmak için \"Sunucu adresi\" sekmesini kullan.")?;
+        rep.stage("Server manifesti alınıyor");
+        let m = sync::fetch_manifest(&murl)?;
+        let host = url::Url::parse(&murl).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_default();
+        prepare_from_manifest(root, inv, m, &host)?
+    };
+    p.source = text.to_string();
+    Ok(p)
+}
+
+/// Server sahibi: mod klasöründen paket kodu üretir (Modrinth'te bulunan modlarla).
+pub fn make_pack(dir: &Path, name: &str, address: &str, game: &str, loader: &str, loader_version: Option<String>, rep: &dyn Reporter) -> R<serverkit::PackBuild> {
+    if loader == "vanilla" {
+        return Err("Paket kodu mod yükleyicili server'lar için; bir yükleyici seç.".into());
+    }
+    invite::parse(address).map_err(|e| e.to_string())?;
+    let lv = match loader_version {
+        Some(v) => v,
+        None => {
+            rep.stage("Yükleyici sürümü aranıyor");
+            install::latest_loader(loader, game)?
+        }
+    };
+    rep.stage("Mod dosyaları taranıyor");
+    let (mods, unknown) = serverkit::scan_lenient(dir)?;
+    if mods.is_empty() {
+        return Err("Bu klasörde tanınan mod yok. Server'ın mods klasörünü seç.".into());
+    }
+    rep.stage("Modrinth'te aranıyor");
+    serverkit::build_pack_code(name, address, game, (loader, &lv), &mods, unknown, &modrinth::lookup_hashes_live)
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -270,6 +408,7 @@ pub struct JoinView {
     pub instance_id: String,
     pub fingerprint: String,
     pub is_new: bool,
+    pub signed: bool,
     pub rows: Vec<JoinRow>,
     pub download_bytes: u64,
     pub noop: bool,
@@ -302,6 +441,7 @@ pub fn join_view(p: &Prepared) -> JoinView {
         instance_id: p.spec.id.clone(),
         fingerprint: p.fingerprint.clone(),
         is_new: p.is_new,
+        signed: p.signed,
         rows,
         download_bytes: p.plan.download_bytes(),
         noop: p.plan.is_noop(),
@@ -313,7 +453,10 @@ pub fn join_run(root: &Path, p: &Prepared, trust_new: bool, java: &Option<PathBu
     let cfg = load_config(root);
     let acct = account_from(&cfg)?;
     let server_id = format!("{}:{}", p.invite.host, p.invite.port);
-    if p.is_new {
+    if !p.signed && !trust_new {
+        return Err("Bu paket imzasız. Kodu kimden aldığına güvendiğini onaylamadan katılamazsın.".into());
+    }
+    if p.signed && p.is_new {
         if !trust_new {
             return Err("Bu server'a güvendiğini onaylamadan katılamazsın.".into());
         }
@@ -322,12 +465,13 @@ pub fn join_run(root: &Path, p: &Prepared, trust_new: bool, java: &Option<PathBu
         sync::save_trust(root, &t)?;
     }
     write_info(root, &{
-        let mut i = info_for(&p.spec, &p.manifest.name, "server", Some((&p.invite.host, p.invite.port)));
+        let mut i = info_for(&p.spec, &p.manifest.name, "server", Some((&p.invite.host, p.invite.port)), true);
         i.last_played = read_info(root, &p.spec.id).ok().and_then(|x| x.last_played);
+        i.source = Some(p.source.clone()).filter(|s| !s.is_empty());
         i
     })?;
     let env = Env::current();
-    let inst = install::ensure_installed(root, &p.spec, &env, rep)?;
+    let inst = install::ensure_installed(root, &p.spec, &env, java, rep)?;
 
     let mods_dir = root.join(p.spec.mods_rel());
     if !p.plan.is_noop() {
@@ -376,13 +520,13 @@ mod tests {
     fn instances_create_list_and_dedupe() {
         let r = tmp("inst");
         assert!(list_instances(&r).is_empty());
-        let a = create_instance(&r, "Vanilla 1.20.1", "1.20.1", None).unwrap();
+        let a = create_instance(&r, "Vanilla 1.20.1", "1.20.1", "vanilla", None).unwrap();
         assert_eq!((a.id.as_str(), a.loader.as_str(), a.kind.as_str()), ("1.20.1-vanilla", "vanilla", "player"));
-        let b = create_instance(&r, "Modlu", "1.21.1", Some(Some("0.16.9".into()))).unwrap();
+        let b = create_instance(&r, "Modlu", "1.21.1", "fabric", Some("0.16.9".into())).unwrap();
         assert_eq!(b.id, "1.21.1-fabric-0.16.9");
-        assert!(create_instance(&r, "Kopya", "1.20.1", None).unwrap_err().contains("zaten"), "aynı sürüm tekrarlanmaz");
-        assert!(create_instance(&r, "  ", "1.20.1", None).is_err());
-        assert!(create_instance(&r, "x", "../kotu", None).is_err());
+        assert!(create_instance(&r, "Kopya", "1.20.1", "vanilla", None).unwrap_err().contains("zaten"), "aynı sürüm tekrarlanmaz");
+        assert!(create_instance(&r, "  ", "1.20.1", "vanilla", None).is_err());
+        assert!(create_instance(&r, "x", "../kotu", "vanilla", None).is_err());
         fs::create_dir_all(r.join("instances/1.21.1-fabric-0.16.9/mods")).unwrap();
         fs::write(r.join("instances/1.21.1-fabric-0.16.9/mods/a.jar"), b"x").unwrap();
         fs::write(r.join("instances/1.21.1-fabric-0.16.9/mods/a.jar.disabled"), b"x").unwrap();
@@ -396,9 +540,133 @@ mod tests {
     }
 
     #[test]
+    fn all_loaders_can_be_created_with_explicit_versions() {
+        let r = tmp("loaders");
+        for (k, g, v) in [("quilt", "1.21.1", "0.26.1"), ("forge", "1.20.1", "47.3.0"), ("neoforge", "1.21.1", "21.1.172")] {
+            let i = create_instance(&r, k, g, k, Some(v.into())).unwrap();
+            assert_eq!((i.loader.as_str(), i.loader_version.as_str()), (k, v));
+            assert_eq!(spec_of(&i).unwrap().loader.kind(), k);
+        }
+        assert_eq!(list_instances(&r).len(), 3);
+        assert!(create_instance(&r, "x", "1.21.1", "magic", Some("1".into())).is_err());
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn direct_connect_creates_unmanaged_server_instance() {
+        let r = tmp("direct");
+        let (i, exit) = connect_server(&r, "my_world.aternos.me:12345", "1.20.1", "forge", Some("47.3.0".into()), false, &None, &NullReporter).unwrap();
+        assert!(exit.is_none());
+        assert_eq!((i.id.as_str(), i.kind.as_str(), i.managed), ("server-my_world.aternos.me-12345", "server", false));
+        assert_eq!((i.server_host.as_deref(), i.server_port), (Some("my_world.aternos.me"), Some(12345)));
+        // aynı server için sürüm değiştirilince kayıt güncellenir, tek instance kalır
+        let (j, _) = connect_server(&r, "my_world.aternos.me:12345", "1.21.1", "vanilla", None, false, &None, &NullReporter).unwrap();
+        assert_eq!((j.game.as_str(), j.loader.as_str()), ("1.21.1", "vanilla"));
+        assert_eq!(list_instances(&r).len(), 1);
+        assert!(connect_server(&r, "bad host", "1.21.1", "vanilla", None, false, &None, &NullReporter).is_err());
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn probe_reports_unreachable_and_online_servers() {
+        use std::io::{Read, Write};
+        let r = tmp("probe");
+        let av: Vec<String> = vec!["1.20.1".into(), "1.21.1".into()];
+        let dead = probe_with(&r, "127.0.0.1", 1, &av);
+        assert!(!dead.online);
+        assert!(dead.note.unwrap().contains("ulaşılamadı"));
+
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let t = std::thread::spawn(move || {
+            let (mut c, _) = l.accept().unwrap();
+            let n = crate::ping::read_varint(&mut c).unwrap() as usize;
+            let mut b = vec![0u8; n + 2];
+            c.read_exact(&mut b).unwrap();
+            let json = br#"{"version":{"name":"Forge 1.20.1","protocol":763},"players":{"max":8,"online":2},"description":{"text":"Dostlar"},"forgeData":{}}"#;
+            let mut body = Vec::new();
+            crate::ping::write_varint(&mut body, 0);
+            crate::ping::write_varint(&mut body, json.len() as u32);
+            body.extend(json);
+            let mut f = Vec::new();
+            crate::ping::write_varint(&mut f, body.len() as u32);
+            f.extend(body);
+            c.write_all(&f).unwrap();
+        });
+        let v = probe_with(&r, "127.0.0.1", port, &av);
+        t.join().unwrap();
+        assert!(v.online);
+        assert_eq!((v.guessed_game.as_deref(), v.loader_hint.as_deref(), v.players.as_str(), v.motd.as_str()), (Some("1.20.1"), Some("forge"), "2/8", "Dostlar"));
+        assert!(v.note.is_none());
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn delete_removes_everything_for_that_instance_only() {
+        let r = tmp("del");
+        let a = create_instance(&r, "A", "1.20.1", "vanilla", None).unwrap();
+        let b = create_instance(&r, "B", "1.21.1", "fabric", Some("0.16.9".into())).unwrap();
+        fs::create_dir_all(r.join("instances").join(&a.id).join("saves/Dunya")).unwrap();
+        fs::write(r.join("instances").join(&a.id).join("saves/Dunya/level.dat"), b"x").unwrap();
+        let mut c = load_config(&r);
+        c.last_instance = Some(a.id.clone());
+        save_config(&r, &c).unwrap();
+        delete_instance(&r, &a.id).unwrap();
+        assert!(!r.join("instances").join(&a.id).exists());
+        assert!(r.join("instances").join(&b.id).join("instance.json").is_file(), "diğer instance'a dokunulmaz");
+        assert_eq!(load_config(&r).last_instance, None);
+        assert!(delete_instance(&r, &a.id).is_err(), "ikinci silme hata verir");
+        assert!(delete_instance(&r, "../instances").is_err());
+        assert!(delete_instance(&r, "..\\x").is_err());
+        assert!(r.join("instances").is_dir());
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn pack_code_flow_is_unsigned_and_needs_explicit_trust() {
+        let r = tmp("pack");
+        let data = crate::sync::tests_jar("create", "*", "x");
+        let pc = PackCode { v: 1, n: "Dostlar".into(), a: "my_world.aternos.me:12345".into(), g: "1.20.1".into(), l: "forge".into(), lv: "47.3.0".into(), m: vec!["VerA".into()] };
+        let e = entry("create", &data);
+        let mut p = prepare_from_pack(&r, &pc, vec![e.clone()]).unwrap();
+        p.source = "kazma://pack/xyz".into();
+        assert!(!p.signed && !p.is_new);
+        assert_eq!(p.spec.id, "server-my_world.aternos.me-12345");
+        assert_eq!(p.plan.download.len(), 1);
+        let v = join_view(&p);
+        assert!(!v.signed);
+        assert_eq!(v.loader, "forge");
+        set_player(&r, "Mustafa").unwrap();
+        assert!(join_run(&r, &p, false, &None, &NullReporter).err().unwrap().contains("imzasız"));
+        // yerel dosya paketle aynıysa hazır sayılır
+        let dir = r.join(p.spec.mods_rel());
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("create.jar"), &data).unwrap();
+        let p2 = prepare_from_pack(&r, &pc, vec![e]).unwrap();
+        assert!(p2.plan.is_noop());
+        // adressiz kod reddedilir, güvenilmeyen adres reddedilir
+        let mut no_addr = pc.clone();
+        no_addr.a = String::new();
+        assert!(prepare_from_pack(&r, &no_addr, vec![]).err().unwrap().contains("adres"));
+        let mut evil = entry("evil", b"e");
+        evil.url = "https://evil.example/e.jar".into();
+        assert!(prepare_from_pack(&r, &pc, vec![evil]).is_err());
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn join_prepare_gives_clear_messages_without_network() {
+        let r = tmp("msg");
+        let e = join_prepare(&r, "my_world.aternos.me:12345", &NullReporter).err().unwrap();
+        assert!(e.contains("paket kodu") && e.contains("Sunucu adresi"));
+        assert!(join_prepare(&r, "kazma://pack/!!!", &NullReporter).is_err());
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
     fn launch_needs_player_name() {
         let r = tmp("noplayer");
-        create_instance(&r, "A", "1.20.1", None).unwrap();
+        create_instance(&r, "A", "1.20.1", "vanilla", None).unwrap();
         let e = launch_instance(&r, "1.20.1-vanilla", &None, &NullReporter).err().unwrap();
         assert!(e.contains("oyuncu adını"));
         let _ = fs::remove_dir_all(&r);

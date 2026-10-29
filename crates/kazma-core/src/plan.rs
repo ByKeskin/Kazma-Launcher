@@ -20,6 +20,9 @@ pub const TRUSTED_GAME_HOSTS: &[&str] = &[
     "maven.fabricmc.net",
     "maven.neoforged.net",
     "maven.minecraftforge.net",
+    "meta.quiltmc.org",
+    "maven.quiltmc.org",
+    "repo1.maven.org",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,7 +96,14 @@ pub fn build_plan(r: &Resolved, env: &Env) -> Result<Plan> {
     for lib in r.libraries.iter().filter(|l| l.allowed(env)) {
         if let Some(a) = lib.artifact() {
             let rel = format!("libraries/{}", a.path);
-            push_dl(&mut p, item(&a.url, rel.clone(), &a.sha1, a.size)?);
+            if a.url.is_empty() {
+                // Forge/NeoForge kurucusunun kendisinin ürettiği dosya: indirilmez, yalnızca sınıf yoluna girer.
+                if !safe_rel_path(&rel) {
+                    return Err(Error::BadManifest(format!("güvensiz dosya yolu: {rel}")));
+                }
+            } else {
+                push_dl(&mut p, item(&a.url, rel.clone(), &a.sha1, a.size)?);
+            }
             if seen_cp.insert(rel.clone()) {
                 p.classpath.push(rel.clone());
             }
@@ -220,6 +230,24 @@ mod tests {
         let mut v = parse(VANILLA).unwrap();
         v.id = "..\\x".into();
         assert!(build_plan(&resolve(v, None).unwrap(), &Env::windows_x64()).is_err());
+    }
+
+    #[test]
+    fn installer_generated_libs_stay_on_classpath_without_download() {
+        let mut v = parse(VANILLA).unwrap();
+        let a = v.libraries[0].downloads.as_mut().unwrap().artifact.as_mut().unwrap();
+        a.url = String::new();
+        let p = build_plan(&resolve(v, None).unwrap(), &Env::windows_x64()).unwrap();
+        assert!(p.classpath.iter().any(|c| c.ends_with("logging-1.2.7.jar")));
+        assert!(!p.downloads.iter().any(|d| d.rel_path.ends_with("logging-1.2.7.jar")));
+    }
+
+    #[test]
+    fn new_loader_hosts_are_trusted() {
+        for u in ["https://maven.quiltmc.org/repository/release/x.jar", "https://repo1.maven.org/maven2/x.jar", "https://maven.neoforged.net/releases/x.jar"] {
+            assert!(game_url_trusted(u), "{u}");
+        }
+        assert!(!game_url_trusted("https://evil.example/x.jar"));
     }
 
     #[test]

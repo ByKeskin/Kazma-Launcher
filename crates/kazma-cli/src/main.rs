@@ -1,11 +1,12 @@
 //! Kazma komut satırı.
 //!
 //!   kazma-cli versions [--snapshots]
-//!   kazma-cli launch <sürüm> <oyuncu> [--fabric [sürüm]] [--ram MB] [--join sunucu[:port]] [--java YOL] [--root KLASÖR]
+//!   kazma-cli launch <sürüm> <oyuncu> [--fabric|--quilt|--forge|--neoforge [sürüm]] [--ram MB] [--join sunucu[:port]] [--java YOL] [--root KLASÖR]
 //!   kazma-cli join <davet> <oyuncu> [--yes] [--ram MB] [--java YOL] [--root KLASÖR]
 //!   kazma-cli make-key <dosya>
-//!   kazma-cli make-manifest --name AD --game SÜRÜM [--fabric YÜKLEYİCİ] --mods KLASÖR --key DOSYA --out DOSYA [--base-url https://...]
+//!   kazma-cli make-manifest --name AD --game SÜRÜM [--fabric|--quilt|--forge|--neoforge SÜRÜM] --mods KLASÖR --key DOSYA --out DOSYA [--base-url https://...]
 //!   kazma-cli make-invite <sunucu[:port]> <manifest-adresi>
+//!   kazma-cli make-code --name AD --address sunucu[:port] --game SÜRÜM --forge|--fabric|--quilt|--neoforge [sürüm] --mods KLASÖR
 
 use kazma_core::invite::{self, Invite};
 use kazma_core::manifest::Loader;
@@ -24,16 +25,17 @@ use std::path::PathBuf;
 const USAGE: &str = "\
 Kullanım:
   kazma-cli versions [--snapshots]
-  kazma-cli launch <sürüm> <oyuncu> [--fabric [sürüm]] [--ram MB] [--join sunucu[:port]] [--java YOL] [--root KLASÖR]
+  kazma-cli launch <sürüm> <oyuncu> [--fabric|--quilt|--forge|--neoforge [sürüm]] [--ram MB] [--join sunucu[:port]] [--java YOL] [--root KLASÖR]
   kazma-cli join <davet> <oyuncu> [--yes] [--ram MB] [--java YOL] [--root KLASÖR]
   kazma-cli make-key <dosya>
-  kazma-cli make-manifest --name AD --game SÜRÜM [--fabric YÜKLEYİCİ] --mods KLASÖR --key DOSYA --out DOSYA [--base-url https://...]
-  kazma-cli make-invite <sunucu[:port]> <manifest-adresi>";
+  kazma-cli make-manifest --name AD --game SÜRÜM [--fabric|--quilt|--forge|--neoforge SÜRÜM] --mods KLASÖR --key DOSYA --out DOSYA [--base-url https://...]
+  kazma-cli make-invite <sunucu[:port]> <manifest-adresi>
+  kazma-cli make-code --name AD --address sunucu[:port] --game SÜRÜM --forge|--fabric|--quilt|--neoforge [sürüm] --mods KLASÖR";
 
 // ---------- argüman ayrıştırma ----------
 
-const VALUE_FLAGS: &[&str] = &["--ram", "--join", "--java", "--root", "--name", "--game", "--mods", "--key", "--out", "--base-url"];
-const OPTIONAL_VALUE_FLAGS: &[&str] = &["--fabric"];
+const VALUE_FLAGS: &[&str] = &["--ram", "--join", "--java", "--root", "--name", "--game", "--mods", "--key", "--out", "--base-url", "--address"];
+const OPTIONAL_VALUE_FLAGS: &[&str] = &["--fabric", "--quilt", "--forge", "--neoforge"];
 const BOOL_FLAGS: &[&str] = &["--snapshots", "--yes"];
 
 #[derive(Debug, Default)]
@@ -105,11 +107,22 @@ fn common(a: &Args) -> R<Common> {
 #[derive(Debug, PartialEq)]
 enum Cmd {
     Versions { snapshots: bool },
-    Launch { game: String, player: String, fabric: Option<Option<String>>, join: Option<(String, u16)>, c: Common },
+    Launch { game: String, player: String, loader: (String, Option<String>), join: Option<String>, c: Common },
     Join { invite: String, player: String, yes: bool, c: Common },
     MakeKey { out: PathBuf },
-    MakeManifest { name: String, game: String, fabric: Option<String>, mods: PathBuf, key: PathBuf, out: PathBuf, base_url: Option<String> },
+    MakeManifest { name: String, game: String, loader: (String, String), mods: PathBuf, key: PathBuf, out: PathBuf, base_url: Option<String> },
     MakeInvite { server: String, manifest_url: String },
+    MakeCode { name: String, address: String, game: String, loader: (String, Option<String>), mods: PathBuf },
+}
+
+/// En fazla bir yükleyici seçeneği verilebilir. Dönen: (tür, isteğe bağlı sürüm); hiç yoksa ("vanilla", None).
+fn loader_flag(a: &Args) -> R<(String, Option<String>)> {
+    let given: Vec<(&str, Option<String>)> = OPTIONAL_VALUE_FLAGS.iter().filter(|f| a.flags.contains_key(**f)).map(|f| (&f[2..], a.val(f))).collect();
+    match given.len() {
+        0 => Ok(("vanilla".into(), None)),
+        1 => Ok((given[0].0.to_string(), given[0].1.clone())),
+        _ => Err("yalnızca bir yükleyici seç (--fabric, --quilt, --forge ya da --neoforge)".into()),
+    }
 }
 
 fn parse_cli(args: &[String]) -> R<Cmd> {
@@ -126,12 +139,12 @@ fn parse_cli(args: &[String]) -> R<Cmd> {
             exact(2)?;
             let join = match a.val("--join") {
                 Some(j) => {
-                    let i = invite::parse(&j).map_err(|e| e.to_string())?;
-                    Some((i.host, i.port))
+                    invite::parse(&j).map_err(|e| e.to_string())?;
+                    Some(j)
                 }
                 None => None,
             };
-            Ok(Cmd::Launch { game: pos(0)?.clone(), player: pos(1)?.clone(), fabric: a.flags.get("--fabric").cloned(), join, c: common(&a)? })
+            Ok(Cmd::Launch { game: pos(0)?.clone(), player: pos(1)?.clone(), loader: loader_flag(&a)?, join, c: common(&a)? })
         }
         "join" => {
             exact(2)?;
@@ -143,20 +156,29 @@ fn parse_cli(args: &[String]) -> R<Cmd> {
         }
         "make-manifest" => {
             exact(0)?;
-            let fabric = match a.flags.get("--fabric") {
-                None => None,
-                Some(Some(v)) => Some(v.clone()),
-                Some(None) => return Err("--fabric için yükleyici sürümü gerekli (örn. --fabric 0.16.9)".into()),
+            let (kind, ver) = loader_flag(&a)?;
+            let loader = match (kind.as_str(), ver) {
+                ("vanilla", _) => ("vanilla".to_string(), String::new()),
+                (k, Some(v)) => (k.to_string(), v),
+                (k, None) => return Err(format!("--{k} için yükleyici sürümü gerekli (örn. --{k} 0.16.9)")),
             };
             Ok(Cmd::MakeManifest {
                 name: a.need("--name")?,
                 game: a.need("--game")?,
-                fabric,
+                loader,
                 mods: PathBuf::from(a.need("--mods")?),
                 key: PathBuf::from(a.need("--key")?),
                 out: PathBuf::from(a.need("--out")?),
                 base_url: a.val("--base-url"),
             })
+        }
+        "make-code" => {
+            exact(0)?;
+            let loader = loader_flag(&a)?;
+            if loader.0 == "vanilla" {
+                return Err("make-code için bir yükleyici seç (--fabric, --quilt, --forge ya da --neoforge)".into());
+            }
+            Ok(Cmd::MakeCode { name: a.need("--name")?, address: a.need("--address")?, game: a.need("--game")?, loader, mods: PathBuf::from(a.need("--mods")?) })
         }
         "make-invite" => {
             exact(2)?;
@@ -185,32 +207,24 @@ fn prepare_root(c: &Common, player: &str) -> R<()> {
     app::save_config(&c.root, &cfg)
 }
 
-fn run_launch(game: String, player: String, fabric: Option<Option<String>>, join: Option<(String, u16)>, c: Common) -> R<i32> {
+fn run_launch(game: String, player: String, loader: (String, Option<String>), join: Option<String>, c: Common) -> R<i32> {
     prepare_root(&c, &player)?;
-    let info = match app::create_instance(&c.root, &format!("{game}{}", if fabric.is_some() { " Fabric" } else { "" }), &game, fabric.clone()) {
-        Ok(i) => i,
-        Err(e) if e.contains("zaten bir instance var") => {
-            // aynı sürüm daha önce oluşturulmuş: kimliği yeniden hesapla
-            let ver = match &fabric {
-                Some(Some(v)) => Some(v.clone()),
-                Some(None) => Some(install::latest_stable_fabric(&game)?),
-                None => None,
-            };
-            let spec = kazma_core::instance::from_selection(&game, ver.as_deref()).map_err(|e| e.to_string())?;
-            app::read_info(&c.root, &spec.id)?
-        }
-        Err(e) => return Err(e),
-    };
-    if join.is_some() {
-        // sunucuya doğrudan bağlanma seçeneği: instance kaydını değiştirmeden tek seferlik
-        let spec = app::spec_of(&info)?;
-        let env = kazma_core::version::Env::current();
-        let inst = install::ensure_installed(&c.root, &spec, &env, &StdoutReporter)?;
-        let acct = kazma_core::launch::Account::offline(&player).map_err(|e| e.to_string())?;
-        let opts = kazma_core::launch::LaunchOptions { max_mb: c.ram, join_server: join, ..Default::default() };
-        return install::launch_game(&c.root, &spec, &inst, &env, &acct, &opts, &c.java, &StdoutReporter).map(report_exit);
+    if let Some(addr) = join {
+        // adresle bağlanma: server için ayrı instance, modları oyuncu kendisi ekler
+        let (_, exit) = app::connect_server(&c.root, &addr, &game, &loader.0, loader.1, true, &c.java, &StdoutReporter)?;
+        return Ok(exit.map(report_exit).unwrap_or(0));
     }
-    app::launch_instance(&c.root, &info.id, &c.java, &StdoutReporter).map(report_exit)
+    let lv = match (loader.0.as_str(), loader.1) {
+        ("vanilla", _) => String::new(),
+        (_, Some(v)) => v,
+        (k, None) => install::latest_loader(k, &game)?,
+    };
+    let spec = kazma_core::instance::from_selection(&game, &loader.0, &lv).map_err(|e| e.to_string())?;
+    if app::read_info(&c.root, &spec.id).is_err() {
+        let name = if loader.0 == "vanilla" { format!("Minecraft {game}") } else { format!("Minecraft {game} {}", loader.0) };
+        app::create_instance(&c.root, &name, &game, &loader.0, Some(lv))?;
+    }
+    app::launch_instance(&c.root, &spec.id, &c.java, &StdoutReporter).map(report_exit)
 }
 
 fn confirm(question: &str, yes: bool) -> bool {
@@ -246,11 +260,8 @@ fn run_join(inv_text: String, player: String, yes: bool, c: Common) -> R<i32> {
     app::join_run(&c.root, &p, true, &c.java, &StdoutReporter).map(report_exit)
 }
 
-fn run_make_manifest(name: String, game: String, fabric: Option<String>, mods: PathBuf, key: PathBuf, out: PathBuf, base_url: Option<String>) -> R<()> {
-    let loader = match &fabric {
-        Some(v) => Loader { kind: "fabric".into(), version: v.clone() },
-        None => Loader { kind: "vanilla".into(), version: String::new() },
-    };
+fn run_make_manifest(name: String, game: String, loader: (String, String), mods: PathBuf, key: PathBuf, out: PathBuf, base_url: Option<String>) -> R<()> {
+    let loader = Loader { kind: loader.0, version: loader.1 };
     let seed = serverkit::read_seed(&key)?;
     let files = serverkit::scan_for_manifest(&mods)?;
     println!("{} mod bulundu, indirme adresleri Modrinth'ten aranıyor", files.len());
@@ -276,14 +287,26 @@ fn run(cmd: Cmd) -> R<i32> {
             }
             Ok(0)
         }
-        Cmd::Launch { game, player, fabric, join, c } => run_launch(game, player, fabric, join, c),
+        Cmd::Launch { game, player, loader, join, c } => run_launch(game, player, loader, join, c),
         Cmd::Join { invite, player, yes, c } => run_join(invite, player, yes, c),
         Cmd::MakeKey { out } => {
             let pk = serverkit::make_key(&out)?;
             println!("Gizli anahtar yazıldı: {} (kimseyle paylaşma, yedekle)\nAçık anahtar parmak izi: {}", out.display(), fingerprint(&pk));
             Ok(0)
         }
-        Cmd::MakeManifest { name, game, fabric, mods, key, out, base_url } => run_make_manifest(name, game, fabric, mods, key, out, base_url).map(|_| 0),
+        Cmd::MakeManifest { name, game, loader, mods, key, out, base_url } => run_make_manifest(name, game, loader, mods, key, out, base_url).map(|_| 0),
+        Cmd::MakeCode { name, address, game, loader, mods } => {
+            let b = app::make_pack(&mods, &name, &address, &game, &loader.0, loader.1, &StdoutReporter)?;
+            println!("{} mod koda girdi.", b.included);
+            if !b.skipped_server_only.is_empty() {
+                println!("Yalnızca server'da çalıştığı için atlananlar: {}", b.skipped_server_only.join(", "));
+            }
+            if !b.missing.is_empty() {
+                println!("Modrinth'te bulunamadı, oyuncular bunları elle eklemeli: {}", b.missing.join(", "));
+            }
+            println!("\nPaket kodu (oyunculara ver):\n{}", b.code);
+            Ok(0)
+        }
         Cmd::MakeInvite { server, manifest_url } => {
             let mut i: Invite = invite::parse(&server).map_err(|e| e.to_string())?;
             let u = url::Url::parse(&manifest_url).map_err(|_| "manifest adresi geçersiz".to_string())?;
@@ -323,22 +346,26 @@ mod tests {
     #[test]
     fn launch_variants() {
         match parse_cli(&a("launch 1.21.1 Mustafa --fabric --ram 6144 --join play.example.com:25570 --root C:\\k")).unwrap() {
-            Cmd::Launch { game, player, fabric, join, c } => {
+            Cmd::Launch { game, player, loader, join, c } => {
                 assert_eq!((game.as_str(), player.as_str()), ("1.21.1", "Mustafa"));
-                assert_eq!(fabric, Some(None), "sürümsüz --fabric = en son kararlı");
-                assert_eq!(join, Some(("play.example.com".into(), 25570)));
+                assert_eq!(loader, ("fabric".to_string(), None), "sürümsüz yükleyici = en uygun sürüm");
+                assert_eq!(join.as_deref(), Some("play.example.com:25570"));
                 assert_eq!((c.ram, c.root), (6144, PathBuf::from("C:\\k")));
             }
             x => panic!("{x:?}"),
         }
-        match parse_cli(&a("launch 1.20.1 X --fabric 0.15.11")).unwrap() {
-            Cmd::Launch { fabric, .. } => assert_eq!(fabric, Some(Some("0.15.11".into()))),
+        match parse_cli(&a("launch 1.20.1 X --forge 47.3.0")).unwrap() {
+            Cmd::Launch { loader, .. } => assert_eq!(loader, ("forge".to_string(), Some("47.3.0".to_string()))),
             x => panic!("{x:?}"),
+        }
+        for k in ["quilt", "neoforge"] {
+            assert!(matches!(parse_cli(&a(&format!("launch 1.21.1 X --{k}"))).unwrap(), Cmd::Launch { .. }));
         }
         match parse_cli(&a("launch 1.20.1 X")).unwrap() {
-            Cmd::Launch { fabric, .. } => assert_eq!(fabric, None, "Fabric yoksa vanilla"),
+            Cmd::Launch { loader, .. } => assert_eq!(loader.0, "vanilla"),
             x => panic!("{x:?}"),
         }
+        assert!(parse_cli(&a("launch 1.20.1 X --fabric --forge")).is_err(), "iki yükleyici birden seçilemez");
     }
 
     #[test]
@@ -358,9 +385,18 @@ mod tests {
     #[test]
     fn make_manifest_needs_everything() {
         let ok = a("make-manifest --name S --game 1.21.1 --fabric 0.16.9 --mods m --key k --out o");
-        assert!(matches!(parse_cli(&ok).unwrap(), Cmd::MakeManifest { fabric: Some(_), .. }));
+        assert!(matches!(parse_cli(&ok).unwrap(), Cmd::MakeManifest { loader, .. } if loader == ("fabric".to_string(), "0.16.9".to_string())));
+        assert!(matches!(parse_cli(&a("make-manifest --name S --game 1.20.1 --forge 47.3.0 --mods m --key k --out o")).unwrap(), Cmd::MakeManifest { .. }));
         assert!(parse_cli(&a("make-manifest --name S --game 1.21.1 --mods m --key k")).is_err());
-        assert!(parse_cli(&a("make-manifest --name S --game 1.21.1 --fabric --mods m --key k --out o")).is_err(), "Fabric için sürüm şart");
+        assert!(parse_cli(&a("make-manifest --name S --game 1.21.1 --fabric --mods m --key k --out o")).is_err(), "yükleyici için sürüm şart");
+    }
+
+    #[test]
+    fn make_code_needs_loader() {
+        let ok = a("make-code --name S --address a.aternos.me:12345 --game 1.20.1 --forge --mods m");
+        assert!(matches!(parse_cli(&ok).unwrap(), Cmd::MakeCode { loader, .. } if loader == ("forge".to_string(), None)));
+        assert!(parse_cli(&a("make-code --name S --address a.com --game 1.20.1 --mods m")).is_err(), "yükleyici şart");
+        assert!(parse_cli(&a("make-code --name S --game 1.20.1 --forge --mods m")).is_err(), "adres şart");
     }
 
     #[test]

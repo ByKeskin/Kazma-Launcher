@@ -3,6 +3,8 @@
 use crate::net::*;
 use crate::sync::read_mod_meta;
 use kazma_core::manifest::{Loader, ModEntry, PackManifest, Side};
+use kazma_core::pack::{self, PackCode};
+use std::collections::HashMap;
 use kazma_core::sign;
 use kazma_core::verify::sha512_hex;
 use std::fs;
@@ -87,6 +89,64 @@ pub fn build_manifest(
     Ok(PackManifest { name: name.into(), game: game.into(), loader, mods: entries, signer: None, signature: None })
 }
 
+/// Paket kodu için tarama: kimliği okunamayan jar'lar hata vermez, ayrı listelenir.
+pub fn scan_lenient(dir: &Path) -> R<(Vec<ModFile>, Vec<String>)> {
+    let mut files: Vec<_> = fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?.flatten().filter(|e| e.path().is_file()).collect();
+    files.sort_by_key(|e| e.file_name());
+    let (mut out, mut unknown) = (Vec::new(), Vec::new());
+    for e in files {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !name.to_ascii_lowercase().ends_with(".jar") {
+            continue;
+        }
+        let bytes = fs::read(e.path()).map_err(|er| format!("{name}: {er}"))?;
+        match read_mod_meta(&bytes) {
+            Some(m) => out.push(ModFile { sha512: sha512_hex(&bytes), size: bytes.len() as u64, id: m.id, version: m.version.unwrap_or_default(), side: m.side, file: name }),
+            None => unknown.push(name),
+        }
+    }
+    Ok((out, unknown))
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct PackBuild {
+    pub code: String,
+    pub included: usize,
+    /// Modrinth'te bulunamadığı için koda girmeyen dosyalar: oyuncular bunları elle eklemeli.
+    pub missing: Vec<String>,
+    /// Yalnızca server'da çalıştığı için koda girmeyen modlar.
+    pub skipped_server_only: Vec<String>,
+}
+
+/// `lookup`: dosya özetlerinden Modrinth sürüm kimliklerini bulur (özet küçük harf -> kimlik).
+pub fn build_pack_code(
+    name: &str,
+    address: &str,
+    game: &str,
+    loader: (&str, &str),
+    mods: &[ModFile],
+    unknown: Vec<String>,
+    lookup: &dyn Fn(&[String]) -> R<HashMap<String, String>>,
+) -> R<PackBuild> {
+    let (client_mods, server_only): (Vec<&ModFile>, Vec<&ModFile>) = mods.iter().partition(|m| m.side != Side::Server);
+    let hashes: Vec<String> = client_mods.iter().map(|m| m.sha512.clone()).collect();
+    let found = if hashes.is_empty() { HashMap::new() } else { lookup(&hashes)? };
+    let (mut ids, mut missing) = (Vec::new(), unknown);
+    for m in client_mods {
+        match found.get(&m.sha512.to_ascii_lowercase()) {
+            Some(v) if !ids.contains(v) => ids.push(v.clone()),
+            Some(_) => {}
+            None => missing.push(m.file.clone()),
+        }
+    }
+    if ids.is_empty() {
+        return Err("Hiçbir mod Modrinth'te bulunamadı. Paket kodu yalnızca Modrinth'teki modları taşıyabilir; kendi barındırdığın modlar için imzalı manifest (make-manifest) kullan.".into());
+    }
+    let pc = PackCode { v: 1, n: name.into(), a: address.into(), g: game.into(), l: loader.0.into(), lv: loader.1.into(), m: ids.clone() };
+    let code = pack::encode(&pc).map_err(|e| e.to_string())?;
+    Ok(PackBuild { code, included: ids.len(), missing, skipped_server_only: server_only.iter().map(|m| m.file.clone()).collect() })
+}
+
 pub fn modrinth_lookup(sha512: &str) -> R<Option<String>> {
     let url = format!("https://api.modrinth.com/v2/version_file/{sha512}?algorithm=sha512");
     match agent().get(&url).call() {
@@ -146,6 +206,34 @@ mod tests {
         assert_eq!(m.mods[0].url, "https://play.example.com/mods/custom%20mod.jar");
         assert!(m.validate_with(&["play.example.com"]).is_ok());
         assert!(m.validate(None).is_err(), "izinli adres olmadan reddedilir");
+    }
+
+    #[test]
+    fn pack_code_from_folder() {
+        let d = std::env::temp_dir().join(format!("kazma-pk-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        for (f, id, env) in [("a.jar", "a", "*"), ("b.jar", "b", "*"), ("srv.jar", "srv", "server"), ("own.jar", "own", "*")] {
+            fs::write(d.join(f), crate::sync::tests_jar(id, env, f)).unwrap();
+        }
+        fs::write(d.join("lib.jar"), b"not a mod").unwrap();
+        let (mods, unknown) = scan_lenient(&d).unwrap();
+        assert_eq!((mods.len(), unknown.as_slice()), (4, ["lib.jar".to_string()].as_slice()));
+        let hash_of = |f: &str| mods.iter().find(|m| m.file == f).unwrap().sha512.clone();
+        let map: HashMap<String, String> = [(hash_of("a.jar"), "VerA".to_string()), (hash_of("b.jar"), "VerB".to_string())].into_iter().collect();
+        let lookup = |hs: &[String]| -> R<HashMap<String, String>> {
+            assert_eq!(hs.len(), 3, "server modu sorgulanmaz");
+            Ok(map.clone())
+        };
+        let r = build_pack_code("Dostlar", "my_world.aternos.me:12345", "1.20.1", ("forge", "47.3.0"), &mods, unknown, &lookup).unwrap();
+        assert_eq!(r.included, 2);
+        assert_eq!(r.skipped_server_only, ["srv.jar"]);
+        assert_eq!(r.missing, ["lib.jar", "own.jar"], "Modrinth'te olmayanlar ve tanınmayanlar listelenir");
+        let back = pack::decode(&r.code).unwrap();
+        assert_eq!((back.m, back.l.as_str(), back.a.as_str()), (vec!["VerA".to_string(), "VerB".to_string()], "forge", "my_world.aternos.me:12345"));
+        let none = |_: &[String]| -> R<HashMap<String, String>> { Ok(HashMap::new()) };
+        assert!(build_pack_code("S", "", "1.20.1", ("forge", "47.3.0"), &mods, vec![], &none).unwrap_err().contains("Hiçbir mod"));
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

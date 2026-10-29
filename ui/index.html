@@ -167,6 +167,12 @@ body[data-skin="terminal"] .pill{border-radius:0}
 .cmd:focus-within{border-color:var(--accent)}
 .in{width:100%;padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--line);background:var(--panel-2);color:var(--ink);font:inherit}
 .in:focus{outline:2px solid var(--accent);outline-offset:1px}
+select.in{color-scheme:dark;cursor:pointer}
+select.in option{background:var(--sheet);color:var(--ink)}
+textarea.in{resize:vertical;line-height:1.5}
+.inst .thumb .del{position:absolute;top:8px;right:8px;width:32px;height:32px;display:grid;place-items:center;border-radius:var(--radius-sm);background:rgba(8,10,17,.72);color:#fff;border:1px solid rgba(255,255,255,.28)}
+.inst .thumb .del:hover{background:var(--bad);border-color:transparent}
+.btn.dangerfill{background:var(--bad);color:#1c0707;border-color:transparent}
 .field{display:flex;flex-direction:column;gap:6px}
 .field label{font-weight:800;font-size:13px}
 .hint{color:var(--ink-3);font-size:12.5px}

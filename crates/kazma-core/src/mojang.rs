@@ -58,7 +58,7 @@ pub fn parse_manifest(json: &str) -> Result<VersionManifest> {
     serde_json::from_str(json).map_err(|e| Error::BadManifest(e.to_string()))
 }
 
-pub(crate) fn plain(s: &str) -> bool {
+pub fn plain(s: &str) -> bool {
     !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'+'))
 }
 
@@ -68,6 +68,14 @@ pub fn fabric_profile_url(game: &str, loader: &str) -> Result<String> {
         return Err(Error::BadManifest("sürüm adı geçersiz karakter içeriyor".into()));
     }
     Ok(format!("https://meta.fabricmc.net/v2/versions/loader/{game}/{loader}/profile/json"))
+}
+
+/// Quilt'in istemci profil JSON'u (Fabric ile aynı biçim).
+pub fn quilt_profile_url(game: &str, loader: &str) -> Result<String> {
+    if !plain(game) || !plain(loader) {
+        return Err(Error::BadManifest("sürüm adı geçersiz karakter içeriyor".into()));
+    }
+    Ok(format!("https://meta.quiltmc.org/v3/versions/loader/{game}/{loader}/profile/json"))
 }
 
 #[cfg(test)]
@@ -104,6 +112,12 @@ mod tests {
     #[test]
     fn broken_json() {
         assert!(matches!(parse_manifest("{"), Err(Error::BadManifest(_))));
+    }
+
+    #[test]
+    fn quilt_url() {
+        assert_eq!(quilt_profile_url("1.21.1", "0.26.1").unwrap(), "https://meta.quiltmc.org/v3/versions/loader/1.21.1/0.26.1/profile/json");
+        assert!(quilt_profile_url("1.21/..", "1").is_err());
     }
 
     #[test]

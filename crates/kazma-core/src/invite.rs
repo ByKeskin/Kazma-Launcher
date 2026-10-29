@@ -50,7 +50,7 @@ pub fn parse(input: &str) -> Result<Invite> {
     };
     let label_ok = |l: &str| {
         !l.is_empty() && l.len() <= 63 && !l.starts_with('-') && !l.ends_with('-')
-            && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     };
     if host.is_empty() || host.len() > 253 || !host.split('.').all(label_ok) {
         return Err(Error::BadInvite(format!("sunucu adı geçersiz: {host}")));
@@ -81,6 +81,13 @@ mod tests {
         assert_eq!(parse("Dostlar-SMP.tunel.example").unwrap().port, 25565);
         assert_eq!(parse("  play.example.com:25570 ").unwrap().address(), "play.example.com:25570");
         assert_eq!(parse("kazma://join/play.example.com/").unwrap().host, "play.example.com");
+    }
+
+    #[test]
+    fn underscore_hosts_like_aternos() {
+        let i = parse("my_world.aternos.me:12345").unwrap();
+        assert_eq!((i.host.as_str(), i.port), ("my_world.aternos.me", 12345));
+        assert!(parse("-bad_.example").is_err());
     }
 
     #[test]
