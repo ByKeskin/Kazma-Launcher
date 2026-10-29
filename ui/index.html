@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kazma Launcher</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: masaüstü uygulama penceresi. Solda gezinme, sağda sahne. Ana ekranda son oynanan dünya büyük kapak olur.
+   İki tema (skin) aynı token'ları yeniden tanımlar: obsidian (varsayılan), terminal. */
+:root{
+  --bg:#080A11; --glow1:rgba(79,224,194,.16); --glow2:rgba(124,140,255,.13);
+  --panel:rgba(255,255,255,.055); --panel-2:rgba(255,255,255,.095); --line:rgba(255,255,255,.11);
+  --ink:#EAF0F7; --ink-2:#A3AFC0; --ink-3:#6E7a8d;
+  --accent:#4FE0C2; --accent-ink:#04201A;
+  --good:#5DDB8C; --warn:#F5B94A; --bad:#FF7070;
+  --sheet:#11141E; --con-bg:#05070C; --con-ink:#CBD6E4;
+  --radius:16px; --radius-sm:10px; --blur:18px; --shadow:0 14px 44px rgba(0,0,0,.4);
+  --font-display:'Pixelify Sans','Courier New',monospace;
+  --font-body:'Manrope',system-ui,sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+  color-scheme:dark;
+}
+body[data-skin="terminal"]{
+  --bg:#0F0C07; --glow1:rgba(255,176,0,.07); --glow2:rgba(255,176,0,.04);
+  --panel:#16110A; --panel-2:#1F1810; --line:#3C2E15;
+  --ink:#F4DBA4; --ink-2:#BE9D5C; --ink-3:#85693A;
+  --accent:#FFB000; --accent-ink:#1A1100;
+  --good:#8FD16B; --warn:#FFB000; --bad:#FF6B4A;
+  --sheet:#16110A; --con-bg:#090703; --con-ink:#F4DBA4;
+  --radius:0px; --radius-sm:0px; --blur:0px; --shadow:none;
+  --font-display:'JetBrains Mono',ui-monospace,monospace;
+  --font-body:'JetBrains Mono',ui-monospace,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{font-family:var(--font-body);background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5;overflow:hidden}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(60% 50% at 88% 0%,var(--glow1),transparent 70%),radial-gradient(55% 55% at 0% 100%,var(--glow2),transparent 70%)}
+body[data-skin="terminal"]::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;opacity:.35;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,.28) 0 1px,transparent 1px 3px)}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+h1,h2,h3{font-family:var(--font-display);font-weight:600;letter-spacing:.01em;text-wrap:balance}
+code,pre,.mono{font-family:var(--font-mono)}
+.tn{font-variant-numeric:tabular-nums}
+
+.app{position:relative;height:100%;display:grid;grid-template-columns:240px minmax(0,1fr);grid-template-rows:36px minmax(0,1fr)}
+.titlebar{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 16px;border-bottom:1px solid var(--line);
+  background:var(--panel);backdrop-filter:blur(var(--blur));font-size:12px;color:var(--ink-3)}
+.winbtns{display:flex;gap:2px}
+.winbtns span{width:34px;height:24px;display:grid;place-items:center;border-radius:calc(var(--radius-sm) - 3px);color:var(--ink-2);font-size:13px}
+.winbtns span:last-child:hover{background:var(--bad);color:#fff}
+
+.side{display:flex;flex-direction:column;gap:22px;padding:18px 12px 14px;border-right:1px solid var(--line);overflow:auto;background:var(--panel);backdrop-filter:blur(var(--blur))}
+.brand{display:flex;align-items:center;gap:10px;padding:0 10px;font-family:var(--font-display);font-size:22px;font-weight:700;letter-spacing:.08em}
+.brand svg{flex:none}
+.nav{display:flex;flex-direction:column;gap:4px}
+.nav button{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:var(--radius-sm);color:var(--ink-2);font-weight:700;text-align:left;border:1px solid transparent}
+.nav button:hover{background:var(--panel-2);color:var(--ink)}
+.nav button[aria-current="page"]{background:var(--panel-2);color:var(--ink);border-color:var(--line);box-shadow:inset 3px 0 0 var(--accent)}
+.nav button[aria-current="page"] svg{color:var(--accent)}
+.side-foot{margin-top:auto;display:flex;flex-direction:column;gap:14px}
+.lbl{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+.skins{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:6px}
+.skins button{display:flex;flex-direction:column;align-items:center;gap:5px;padding:8px 4px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:11px;font-weight:700;color:var(--ink-2)}
+.skins button[aria-pressed="true"]{border-color:var(--accent);color:var(--ink);background:var(--panel-2)}
+.sw{width:26px;height:16px;border-radius:calc(var(--radius-sm) - 4px);border:1px solid var(--line)}
+.acct{display:flex;align-items:center;gap:10px;padding:8px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--panel-2);text-align:left;width:100%}
+.acct canvas{width:34px;height:34px;image-rendering:pixelated;border-radius:calc(var(--radius-sm) - 4px);flex:none}
+.acct b{display:block;line-height:1.2}
+.acct small{color:var(--ink-3);font-size:12px}
+
+.main{overflow:auto;padding:28px 32px 48px;min-width:0}
+.view{max-width:1120px;margin:0 auto;display:flex;flex-direction:column;gap:22px}
+.view[hidden]{display:none}
+.ph{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
+.ph h1{font-size:30px;line-height:1.15}
+.ph p{color:var(--ink-2);margin-top:4px;max-width:60ch}
+h2{font-size:18px}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);backdrop-filter:blur(var(--blur));padding:18px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:9px 16px;border-radius:var(--radius-sm);font-weight:800;border:1px solid var(--line);background:var(--panel-2);color:var(--ink);white-space:nowrap}
+.btn:hover:not(:disabled){border-color:var(--accent)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.btn.primary:hover:not(:disabled){filter:brightness(1.08);border-color:transparent}
+.btn.lg{padding:14px 30px;font-size:16px}
+.btn.sm{padding:5px 11px;font-size:12.5px}
+.btn.danger{color:var(--bad)}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:99px;font-size:12px;font-weight:800;border:1px solid currentColor;white-space:nowrap}
+body[data-skin="terminal"] .pill{border-radius:0}
+.pill.good{color:var(--good);background:color-mix(in srgb,var(--good) 14%,transparent)}
+.pill.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.pill.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.pill.mute{color:var(--ink-2);background:var(--panel-2);border-color:var(--line)}
+.pill.acc{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.dot{width:8px;height:8px;border-radius:50%;background:currentColor}
+
+/* ana ekran */
+.hero{position:relative;border-radius:calc(var(--radius) + 4px);overflow:hidden;min-height:310px;display:flex;align-items:flex-end;border:1px solid var(--line);box-shadow:var(--shadow)}
+.hero canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;image-rendering:pixelated}
+.hero::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 15%,rgba(5,7,12,.86))}
+.hero-in{position:relative;z-index:1;width:100%;padding:28px;display:flex;justify-content:space-between;align-items:flex-end;gap:24px;flex-wrap:wrap;color:#fff}
+.hero h1{font-size:40px;line-height:1.05;margin:8px 0 12px;text-shadow:0 2px 14px rgba(0,0,0,.5)}
+.hero .chips{display:flex;gap:8px;flex-wrap:wrap}
+.hero .pill.mute{background:rgba(255,255,255,.14);color:#fff;border-color:rgba(255,255,255,.25)}
+.hero-act{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.hero .btn:not(.primary){background:rgba(10,12,18,.55);color:#fff;border-color:rgba(255,255,255,.28)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+.tile{display:flex;gap:14px;align-items:flex-start;text-align:left;padding:16px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);backdrop-filter:blur(var(--blur));width:100%}
+.tile:hover{border-color:var(--accent);transform:translateY(-2px)}
+.tile .ib{flex:none;width:42px;height:42px;display:grid;place-items:center;border-radius:var(--radius-sm);background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.tile b{display:block;font-size:15px}
+.tile span{color:var(--ink-2);font-size:13px}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:14px}
+.row{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:0}
+.row .grow{flex:1;min-width:0}
+.row small{color:var(--ink-3);display:block}
+.av{width:32px;height:32px;border-radius:calc(var(--radius-sm) - 3px);display:grid;place-items:center;font-weight:800;font-size:13px;flex:none;color:#fff}
+.card h2{margin-bottom:6px}
+
+/* kütüphane */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}
+.inst{padding:0;overflow:hidden;display:flex;flex-direction:column}
+.inst .thumb{position:relative;height:124px}
+.inst .thumb canvas{width:100%;height:100%;object-fit:cover;image-rendering:pixelated;display:block}
+.inst .body{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;flex:1}
+.inst h3{font-size:18px}
+.inst .meta{display:flex;gap:6px;flex-wrap:wrap}
+.inst .foot{display:flex;justify-content:space-between;align-items:center;margin-top:auto;color:var(--ink-3);font-size:12.5px;gap:8px}
+.inst:hover{border-color:var(--accent)}
+.add{display:grid;place-items:center;min-height:240px;border:2px dashed var(--line);border-radius:var(--radius);color:var(--ink-2);font-weight:800;gap:8px;text-align:center;padding:16px}
+.add:hover{border-color:var(--accent);color:var(--accent)}
+
+/* server */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);overflow-x:auto}
+.tabs button{padding:10px 16px;color:var(--ink-2);font-weight:800;border-bottom:2px solid transparent;white-space:nowrap}
+.tabs button[aria-selected="true"]{color:var(--ink);border-color:var(--accent)}
+.tabpane[hidden]{display:none}
+.tabpane{display:flex;flex-direction:column;gap:16px}
+.srvhead{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:center}
+.srvhead h2{font-size:24px;margin:0}
+.addr{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;color:var(--ink-2)}
+.addr code{padding:3px 8px;border-radius:calc(var(--radius-sm) - 4px);background:var(--panel-2);border:1px solid var(--line);color:var(--ink)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.stat{padding:14px 16px}
+.stat .v{font-family:var(--font-display);font-size:28px;line-height:1.1;margin:2px 0 6px}
+.stat .v small{font-size:13px;color:var(--ink-3);font-family:var(--font-body)}
+.stat svg{display:block;width:100%;height:36px}
+.split{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr);gap:16px}
+.console{background:var(--con-bg);color:var(--con-ink);font-family:var(--font-mono);font-size:12.5px;line-height:1.6;height:290px;overflow:auto;padding:12px 14px;border-radius:var(--radius-sm) var(--radius-sm) 0 0;border:1px solid var(--line);border-bottom:0}
+.console div{white-space:pre-wrap;word-break:break-word}
+.console .t{color:rgba(255,255,255,.38)}
+.console .w{color:#F5B94A}.console .j{color:#6FE39A}.console .c{color:#8FD3FF}.console .e{color:#FF8A7A}
+.cmd{display:flex;border:1px solid var(--line);border-radius:0 0 var(--radius-sm) var(--radius-sm);background:var(--con-bg)}
+.cmd span{padding:9px 0 9px 14px;color:var(--accent);font-family:var(--font-mono)}
+.cmd input{flex:1;background:none;border:0;color:var(--con-ink);font-family:var(--font-mono);font-size:12.5px;padding:9px 12px}
+.cmd input:focus{outline:none}
+.cmd:focus-within{border-color:var(--accent)}
+.in{width:100%;padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--line);background:var(--panel-2);color:var(--ink);font:inherit}
+.in:focus{outline:2px solid var(--accent);outline-offset:1px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-weight:800;font-size:13px}
+.hint{color:var(--ink-3);font-size:12.5px}
+.sw-row{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}
+.switch{flex:none;width:46px;height:26px;border-radius:99px;background:var(--panel-2);border:1px solid var(--line);position:relative;transition:background .2s}
+body[data-skin="terminal"] .switch{border-radius:0}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:var(--ink-2);transition:transform .2s,background .2s}
+body[data-skin="terminal"] .switch::after{border-radius:0}
+.switch[aria-checked="true"]{background:var(--accent);border-color:transparent}
+.switch[aria-checked="true"]::after{transform:translateX(20px);background:var(--accent-ink)}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.seg button{padding:10px 8px;border:1px solid var(--line);border-radius:var(--radius-sm);font-weight:800;font-size:13px;color:var(--ink-2);text-align:center}
+.seg button[aria-pressed="true"]{border-color:var(--accent);color:var(--ink);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+pre.manifest{background:var(--con-bg);color:var(--con-ink);padding:14px 16px;border-radius:var(--radius-sm);overflow:auto;font-size:12.5px;line-height:1.55;border:1px solid var(--line);max-height:300px}
+pre .k{color:#8FD3FF}pre .s{color:#9BE3A8}pre .n{color:#F5B94A}
+.callout{display:flex;gap:12px;padding:12px 14px;border-radius:var(--radius-sm);border:1px solid var(--line);background:color-mix(in srgb,var(--accent) 8%,transparent);color:var(--ink-2);font-size:13px}
+.callout svg{flex:none;color:var(--accent)}
+
+/* katıl */
+.joinbar{display:flex;gap:10px;flex-wrap:wrap}
+.joinbar .in{flex:1;min-width:220px;font-family:var(--font-mono)}
+.sumgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.sum{padding:12px 14px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--panel-2)}
+.sum b{display:block;font-family:var(--font-display);font-size:24px;line-height:1.1}
+.sum span{color:var(--ink-2);font-size:12.5px}
+.sync{display:flex;flex-direction:column}
+.srow{display:grid;grid-template-columns:minmax(0,1fr) 128px 80px;gap:14px;align-items:center;padding:11px 0;border-top:1px solid var(--line)}
+.srow:first-child{border-top:0}
+.srow small{display:block;color:var(--ink-3)}
+.srow .sz{text-align:right;color:var(--ink-2);font-size:12.5px}
+.bar{height:6px;border-radius:9px;background:var(--panel-2);overflow:hidden;margin-top:6px}
+body[data-skin="terminal"] .bar{border-radius:0}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .25s linear}
+.check{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+.check input{margin-top:3px;width:16px;height:16px;accent-color:var(--accent)}
+
+/* mod gezgini */
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{padding:6px 13px;border-radius:99px;border:1px solid var(--line);font-weight:800;font-size:13px;color:var(--ink-2)}
+body[data-skin="terminal"] .chip{border-radius:0}
+.chip[aria-pressed="true"]{border-color:var(--accent);color:var(--ink);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.mods{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.mod{display:flex;gap:14px;padding:14px}
+.mod .ic{flex:none;width:48px;height:48px;image-rendering:pixelated;border-radius:calc(var(--radius-sm) - 2px)}
+.mod .tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.mod h3{font-size:17px}
+.mod p{color:var(--ink-2);font-size:13px}
+.mod .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:auto}
+
+/* modal, toast */
+.modal{position:fixed;inset:0;z-index:30;display:grid;place-items:center;background:rgba(3,5,10,.62);padding:16px}
+.modal[hidden]{display:none}
+.sheet{width:min(480px,100%);max-height:100%;overflow:auto;background:var(--sheet);border:1px solid var(--line);border-radius:calc(var(--radius) + 2px);padding:22px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:16px}
+.sheet h2{font-size:22px;margin:0}
+.code{font-family:var(--font-mono);font-size:30px;font-weight:600;letter-spacing:.2em;text-align:center;padding:14px;border-radius:var(--radius-sm);background:var(--panel-2);border:1px dashed var(--accent)}
+.steps{display:flex;flex-direction:column;gap:10px}
+.step{display:flex;align-items:center;gap:12px;color:var(--ink-3)}
+.step .m{width:22px;height:22px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;flex:none}
+body[data-skin="terminal"] .step .m{border-radius:0}
+.step.on{color:var(--ink)}
+.step.on .m{border-color:var(--accent);border-top-color:transparent;animation:spin .8s linear infinite}
+.step.done{color:var(--ink)}
+.step.done .m{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.step.done .m svg{width:13px;height:13px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,20px);opacity:0;pointer-events:none;z-index:40;background:var(--sheet);color:var(--ink);border:1px solid var(--accent);padding:10px 18px;border-radius:var(--radius-sm);box-shadow:var(--shadow);font-weight:700;transition:.25s;max-width:calc(100% - 32px)}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.err{color:var(--bad);font-size:13px;min-height:19px}
+
+@media (max-width:860px){
+  .app{grid-template-columns:minmax(0,1fr);grid-template-rows:36px auto minmax(0,1fr)}
+  .side{flex-direction:row;align-items:center;gap:8px;padding:8px 12px;border-right:0;border-bottom:1px solid var(--line)}
+  .brand span{display:none}.brand{padding:0}
+  .nav{flex-direction:row}.nav button{padding:8px 10px}.nav button span{display:none}
+  .side-foot{margin:0 0 0 auto;flex-direction:row;align-items:center}
+  .skins-wrap{display:none}.acct div{display:none}.acct{width:auto}
+  .main{padding:18px 16px 36px}
+  .split{grid-template-columns:minmax(0,1fr)}
+  .hero h1{font-size:30px}
+  .srow{grid-template-columns:minmax(0,1fr) auto}.srow .sz{display:none}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body data-skin="obsidian">
+<div class="app">
+  <div class="titlebar"><span>Kazma Launcher 0.1 · arayüz prototipi · örnek verilerle çalışır</span><div class="winbtns" aria-hidden="true"><span>–</span><span>▢</span><span>✕</span></div></div>
+
+  <aside class="side">
+    <div class="brand"><svg id="logo" width="30" height="30" viewBox="0 0 10 10" shape-rendering="crispEdges" aria-hidden="true"></svg><span>KAZMA</span></div>
+    <nav class="nav" aria-label="Ana gezinme">
+      <button data-go="home"><i data-i="home"></i><span>Ana Sayfa</span></button>
+      <button data-go="library"><i data-i="grid"></i><span>Kütüphane</span></button>
+      <button data-go="servers"><i data-i="server"></i><span>Serverlar</span></button>
+      <button data-go="join"><i data-i="join"></i><span>Server’a Katıl</span></button>
+      <button data-go="mods"><i data-i="box"></i><span>Mod Gezgini</span></button>
+    </nav>
+    <div class="side-foot">
+      <div class="skins-wrap"><div class="lbl">Tema</div>
+        <div class="skins" role="group" aria-label="Tema seç">
+          <button data-skin="obsidian" aria-pressed="true"><i class="sw" style="background:linear-gradient(135deg,#0b0e18,#4FE0C2)"></i>Obsidian</button>
+          <button data-skin="terminal" aria-pressed="false"><i class="sw" style="background:linear-gradient(135deg,#0F0C07,#FFB000)"></i>Terminal</button>
+        </div>
+      </div>
+      <button class="acct" id="acctBtn" aria-label="Hesabı değiştir"><canvas id="head" width="8" height="8"></canvas><div><b id="acctName">Mustafa</b><small id="acctType">Microsoft hesabı</small></div></button>
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <!-- ANA SAYFA -->
+    <section class="view" id="v-home" aria-label="Ana Sayfa">
+      <div class="hero">
+        <canvas id="heroCv" aria-hidden="true"></canvas>
+        <div class="hero-in">
+          <div>
+            <span class="pill acc"><i class="dot"></i>Son oynanan</span>
+            <h1>Survival Dostlar</h1>
+            <div class="chips"><span class="pill mute">Fabric 0.16</span><span class="pill mute">Minecraft 1.21.1</span><span class="pill mute">47 mod</span><span class="pill mute">Dostlar SMP’ye bağlı</span></div>
+          </div>
+          <div class="hero-act">
+            <button class="btn primary lg" id="heroPlay"><i data-i="play"></i>Oyna</button>
+            <button class="btn" data-go="join"><i data-i="join"></i>Server’a katıl</button>
+          </div>
+        </div>
+      </div>
+      <div class="tiles">
+        <button class="tile" data-go="servers"><span class="ib"><i data-i="server"></i></span><div><b>Server kur</b><span>Paper, Fabric ya da Forge. Tek tıkla, ayarlar hazır.</span></div></button>
+        <button class="tile" data-go="join"><span class="ib"><i data-i="link"></i></span><div><b>Davet koduyla gir</b><span>Eksik modlar otomatik indirilir, sonra bağlanırsın.</span></div></button>
+        <button class="tile" data-go="mods"><span class="ib"><i data-i="box"></i></span><div><b>Mod keşfet</b><span>Modrinth kataloğu. Instance’a ya da server’a ekle.</span></div></button>
+      </div>
+      <div class="cols">
+        <div class="card"><h2>Çevrimiçi arkadaşlar</h2>
+          <div class="row"><span class="av" style="background:#3E8E5A">Z</span><div class="grow"><b>Zeynep</b><small>Dostlar SMP · Survival Dostlar</small></div><span class="pill good"><i class="dot"></i>Oyunda</span></div>
+          <div class="row"><span class="av" style="background:#B2683A">E</span><div class="grow"><b>Efe_Kral</b><small>Dostlar SMP · Alternatif launcher</small></div><span class="pill good"><i class="dot"></i>Oyunda</span></div>
+          <div class="row"><span class="av" style="background:#6A5FB5">B</span><div class="grow"><b>Berk</b><small>Create: Gökyüzü Fabrikası</small></div><span class="pill mute">Boşta</span></div>
+        </div>
+        <div class="card"><h2>Son etkinlik</h2>
+          <div class="row"><span class="pill acc">Mod</span><div class="grow"><b>Create 6.0.4 eşitlendi</b><small>Dostlar SMP manifestinden · 22:41</small></div></div>
+          <div class="row"><span class="pill good">Yedek</span><div class="grow"><b>Dostlar SMP dünyası yedeklendi</b><small>412 MB · 21:00</small></div></div>
+          <div class="row"><span class="pill warn">Güncelleme</span><div class="grow"><b>Lithium için yeni sürüm var</b><small>0.13.0 → 0.13.1 · dün</small></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- KÜTÜPHANE -->
+    <section class="view" id="v-library" aria-label="Kütüphane" hidden>
+      <div class="ph"><div><h1>Kütüphane</h1><p>Her instance kendi Minecraft sürümüne, mod yükleyicisine ve Java ayarına sahip. Hepsi birbirinden bağımsız.</p></div><button class="btn primary" id="newInst"><i data-i="plus"></i>Yeni instance</button></div>
+      <div class="grid" id="instGrid"></div>
+    </section>
+
+    <!-- SERVERLAR -->
+    <section class="view" id="v-servers" aria-label="Serverlar" hidden>
+      <div class="ph"><div><h1>Serverlar</h1><p>Kendi server’ını kur, modlarını yönet, arkadaşlarını davet et.</p></div><button class="btn" id="newSrv"><i data-i="plus"></i>Yeni server kur</button></div>
+      <div class="card">
+        <div class="srvhead">
+          <div>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><h2>Dostlar SMP</h2><span class="pill good" id="srvPill"><i class="dot"></i>Çalışıyor</span><span class="pill mute">Fabric · 1.21.1</span></div>
+            <div class="addr">Adres <code id="srvAddr">95.12.34.56:25565</code><button class="btn sm" data-copy="srvAddr"><i data-i="copy"></i>Kopyala</button></div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" id="srvStart" disabled><i data-i="play"></i>Başlat</button>
+            <button class="btn" id="srvRestart"><i data-i="refresh"></i>Yeniden başlat</button>
+            <button class="btn danger" id="srvStop"><i data-i="stop"></i>Durdur</button>
+          </div>
+        </div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Server bölümleri">
+        <button role="tab" id="tab-genel" aria-selected="true" aria-controls="p-genel" data-tab="genel">Genel</button>
+        <button role="tab" id="tab-modlar" aria-selected="false" aria-controls="p-modlar" data-tab="modlar">Modlar</button>
+        <button role="tab" id="tab-erisim" aria-selected="false" aria-controls="p-erisim" data-tab="erisim">Erişim ve giriş</button>
+      </div>
+
+      <div class="tabpane" id="p-genel" role="tabpanel" aria-labelledby="tab-genel">
+        <div class="stats">
+          <div class="card stat"><div class="lbl">TPS</div><div class="v tn" id="vTps">20.0</div><svg id="spTps" aria-hidden="true"></svg></div>
+          <div class="card stat"><div class="lbl">RAM</div><div class="v tn" id="vRam">3.2 <small>/ 6 GB</small></div><svg id="spRam" aria-hidden="true"></svg></div>
+          <div class="card stat"><div class="lbl">CPU</div><div class="v tn" id="vCpu">18 <small>%</small></div><svg id="spCpu" aria-hidden="true"></svg></div>
+          <div class="card stat"><div class="lbl">Oyuncu</div><div class="v tn" id="vPly">3 <small>/ 20</small></div><div class="hint">Çalışma süresi <span class="tn" id="vUp">2 sa 14 dk</span></div></div>
+        </div>
+        <div class="split">
+          <div><div class="console" id="con" role="log" aria-live="off" aria-label="Server konsolu"></div>
+            <form class="cmd" id="cmdForm"><span>&gt;</span><input id="cmdIn" type="text" placeholder="Komut yaz, örn. say merhaba" autocomplete="off" aria-label="Konsol komutu"></form></div>
+          <div class="card"><h2>Oyuncular</h2>
+            <div class="row"><span class="av" style="background:#4A7FB5">M</span><div class="grow"><b>Mustafa</b><small>12 ms · sahip</small></div><span class="pill acc">Microsoft</span></div>
+            <div class="row"><span class="av" style="background:#3E8E5A">Z</span><div class="grow"><b>Zeynep</b><small>31 ms</small></div><span class="pill acc">Microsoft</span></div>
+            <div class="row"><span class="av" style="background:#B2683A">E</span><div class="grow"><b>Efe_Kral</b><small>44 ms · şifreyle girdi</small></div><span class="pill warn">Alternatif</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabpane" id="p-modlar" role="tabpanel" aria-labelledby="tab-modlar" hidden>
+        <div class="split">
+          <div class="card"><div class="sw-row" style="align-items:center"><div><h2>Server modları</h2><p class="hint">Oyuncular katılırken bu listeyle eşitlenir.</p></div><span class="pill acc">47 mod</span></div>
+            <div id="srvMods"></div>
+          </div>
+          <div class="card" style="display:flex;flex-direction:column;gap:12px"><div><h2>Katılım manifesti</h2><p class="hint">Mod ekleyip çıkardıkça otomatik güncellenir ve imzalanır.</p></div>
+            <pre class="manifest" id="manifest"></pre>
+            <button class="btn" data-copy="manifest"><i data-i="copy"></i>Manifesti kopyala</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabpane" id="p-erisim" role="tabpanel" aria-labelledby="tab-erisim" hidden>
+        <div class="split">
+          <div class="card" style="display:flex;flex-direction:column;gap:18px">
+            <div class="sw-row"><div><h2>Karma giriş</h2><p class="hint" style="max-width:52ch">Microsoft hesabıyla ve alternatif launcher’la gelen oyuncular aynı server’a girer. Alternatif oyuncular ilk girişte şifre belirler. Microsoft hesabı doğrulanan oyuncular şifresiz girer.</p></div>
+              <button class="switch" role="switch" aria-checked="true" id="mixSw" aria-label="Karma girişi aç"></button></div>
+            <div class="callout"><i data-i="shield"></i><div id="mixNote">Karma giriş açık. Kimlik sahteciliğine karşı giriş koruması etkin: <code>online-mode=false</code> yazılır, kayıt ve giriş komutları eklenir.</div></div>
+            <div class="field"><label>Bağlantı yöntemi</label>
+              <div class="seg" id="tunSeg">
+                <button aria-pressed="true" data-tun="upnp">UPnP</button><button aria-pressed="false" data-tun="tunnel">Tünel</button><button aria-pressed="false" data-tun="manual">Elle port</button>
+              </div>
+              <span class="hint" id="tunHint">Router’da port otomatik açılır. Çoğu ev bağlantısında çalışır.</span></div>
+          </div>
+          <div class="card" style="display:flex;flex-direction:column;gap:12px"><h2>Davet bağlantısı</h2>
+            <p class="hint">Arkadaşın bunu Kazma’da açınca modlar otomatik inip oyun server’a bağlanır.</p>
+            <code class="in" id="invite" style="word-break:break-all">kazma://join/95.12.34.56:25565</code>
+            <button class="btn primary" data-copy="invite"><i data-i="copy"></i>Bağlantıyı kopyala</button>
+            <div class="field"><label for="wl">Beyaz liste</label><input id="wl" class="in" value="Mustafa, Zeynep, Efe_Kral, Berk"><span class="hint">Virgülle ayır. Boş bırakırsan herkes girebilir.</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- KATIL -->
+    <section class="view" id="v-join" aria-label="Server’a Katıl" hidden>
+      <div class="ph"><div><h1>Server’a katıl</h1><p>Davet bağlantısını ya da adresi yapıştır. Kazma server’daki modları karşılaştırır, eksikleri indirir ve seni bağlar.</p></div></div>
+      <div class="card" style="display:flex;flex-direction:column;gap:14px">
+        <div class="field"><label for="joinIn">Davet bağlantısı ya da adres</label>
+          <div class="joinbar"><input id="joinIn" class="in" value="kazma://join/95.12.34.56:25565"><button class="btn primary" id="queryBtn"><i data-i="refresh"></i>Server’ı sorgula</button></div></div>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><h2 style="margin:0">Dostlar SMP</h2><span class="pill good"><i class="dot"></i>Çevrimiçi · 3/20</span><span class="pill mute">Fabric 0.16 · 1.21.1</span><span class="pill acc" id="mixPill">Karma giriş açık</span></div>
+        <div class="hint" id="acctNote"></div>
+      </div>
+      <div class="sumgrid" id="sumGrid"></div>
+      <div class="card"><h2>Mod karşılaştırması</h2><p class="hint">Server’da 47 mod var. Değişen ve eksik olanlar aşağıda, 39 mod zaten hazır.</p><div class="sync" id="sync"></div></div>
+      <div class="card" style="display:flex;flex-direction:column;gap:14px">
+        <div class="callout"><i data-i="shield"></i><div>Dosyalar yalnızca Modrinth, CurseForge ya da server sahibinin imzalı deposundan gelir. Her dosyanın SHA-512 özeti manifestle karşılaştırılır. Uyuşmayan dosya indirilmez.</div></div>
+        <label class="check" for="trust"><input type="checkbox" id="trust"><span>Bu server’ın modlarını yüklemek istiyorum. Modların oyunum üzerinde kod çalıştırabileceğini biliyorum.</span></label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn primary lg" id="syncBtn" disabled><i data-i="download"></i>Eşitle ve katıl</button><span class="hint" id="syncHint" style="align-self:center">Devam etmek için onay kutusunu işaretle.</span></div>
+      </div>
+    </section>
+
+    <!-- MOD GEZGİNİ -->
+    <section class="view" id="v-mods" aria-label="Mod Gezgini" hidden>
+      <div class="ph"><div><h1>Mod gezgini</h1><p>Modrinth kataloğundan ara. Seçtiğin hedefe eklenir; server’a eklersen manifest de güncellenir.</p></div></div>
+      <div class="card" style="display:flex;flex-direction:column;gap:14px">
+        <div class="joinbar"><input id="modQ" class="in" style="font-family:var(--font-body)" placeholder="Mod ara, örn. sodium" aria-label="Mod ara"></div>
+        <div class="chips" id="catChips" role="group" aria-label="Kategori"></div>
+        <div class="field"><label>Eklenecek yer</label><div class="seg" id="tgtSeg" style="grid-template-columns:repeat(2,1fr)">
+          <button aria-pressed="true" data-t="Survival Dostlar">Instance · Survival Dostlar</button><button aria-pressed="false" data-t="Dostlar SMP">Server · Dostlar SMP</button></div></div>
+      </div>
+      <div class="mods" id="modList"></div>
+    </section>
+  </main>
+</div>
+
+<!-- Giriş penceresi -->
+<div class="modal" id="loginModal" hidden role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+  <div class="sheet">
+    <h2 id="loginTitle">Hesap</h2>
+    <div class="seg" id="loginSeg" style="grid-template-columns:repeat(2,1fr)"><button aria-pressed="true" data-l="ms">Microsoft</button><button aria-pressed="false" data-l="off">Alternatif (çevrimdışı)</button></div>
+    <div id="lg-ms" style="display:flex;flex-direction:column;gap:12px">
+      <p class="hint">Tarayıcıda microsoft.com/link adresini aç ve bu kodu gir.</p>
+      <div class="code">H7KQ-2M9X</div>
+      <p class="hint">Giriş tamamlanınca Kazma hesabını otomatik algılar.</p>
+    </div>
+    <div id="lg-off" style="display:none;flex-direction:column;gap:10px">
+      <div class="field"><label for="offName">Oyuncu adı</label><input id="offName" class="in" maxlength="16" placeholder="3–16 karakter, harf, rakam, _" autocomplete="off"></div>
+      <div class="err" id="offErr" aria-live="polite"></div>
+      <p class="hint">Çevrimdışı hesaplar yalnızca karma girişi açık server’lara girebilir ve skin göremez.</p>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end"><button class="btn" id="loginCancel">Vazgeç</button><button class="btn primary" id="loginOk">Giriş yaptım</button></div>
+  </div>
+</div>
+
+<!-- Başlatma penceresi -->
+<div class="modal" id="launchModal" hidden role="dialog" aria-modal="true" aria-labelledby="launchTitle">
+  <div class="sheet">
+    <div><span class="lbl">Başlatılıyor</span><h2 id="launchTitle">Survival Dostlar</h2></div>
+    <div class="steps" id="launchSteps"></div>
+    <div class="bar" style="height:8px"><i id="launchBar"></i></div>
+    <div style="display:flex;justify-content:flex-end"><button class="btn" id="launchClose">Kapat</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function(){
+'use strict';
+var $=function(s,r){return (r||document).querySelector(s)};
+var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
+var sleep=function(ms){return new Promise(function(r){setTimeout(r,ms)})};
+
+/* ---------- ikonlar ---------- */
+var P={
+ home:'<path d="M3 11l9-8 9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/>',
+ grid:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+ server:'<rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/>',
+ join:'<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/>',
+ box:'<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+ play:'<path d="M7 4l13 8-13 8z" fill="currentColor"/>',
+ plus:'<path d="M12 5v14M5 12h14"/>',
+ copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
+ shield:'<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
+ download:'<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',
+ check:'<path d="M5 12l5 5 9-10"/>',
+ refresh:'<path d="M20 11a8 8 0 0 0-14-4L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14 4l2-2"/><path d="M20 20v-5h-5"/>',
+ stop:'<rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor"/>',
+ link:'<path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>'
+};
+function ic(n,s){s=s||18;return '<svg viewBox="0 0 24 24" width="'+s+'" height="'+s+'" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+P[n]+'</svg>'}
+function paintIcons(root){$$('[data-i]',root).forEach(function(el){el.innerHTML=ic(el.dataset.i,20);el.style.display='inline-flex'})}
+paintIcons();
+
+/* ---------- logo: piksel kazma ---------- */
+(function(){
+ var head=[[2,0],[3,0],[4,0],[5,0],[6,0],[7,0],[1,1],[2,1],[7,1],[8,1],[0,2],[1,2],[8,2],[9,2]];
+ var handle=[[4,1],[5,1],[4,2],[5,2],[4,3],[5,3],[4,4],[5,4],[4,5],[5,5],[4,6],[5,6],[4,7],[5,7],[4,8],[5,8],[4,9],[5,9]];
+ var s='';
+ head.forEach(function(p){s+='<rect x="'+p[0]+'" y="'+p[1]+'" width="1" height="1" fill="var(--accent)"/>'});
+ handle.forEach(function(p){s+='<rect x="'+p[0]+'" y="'+p[1]+'" width="1" height="1" fill="#A9743F"/>'});
+ $('#logo').innerHTML=s;
+})();
+
+/* ---------- üretilmiş piksel sahneler ---------- */
+var SC={
+ day:{sky:['#74C0F0','#D4EEFF'],grass:'#5FA84A',dirt:'#8A5E3B',stone:'#7C8087',sun:'#FFF3B0',leaf:'#3F7F36',stars:0},
+ dusk:{sky:['#33235E','#F28C5C'],grass:'#4C7F45',dirt:'#6B4A32',stone:'#5E6068',sun:'#FFD28A',leaf:'#2F5E36',stars:14},
+ night:{sky:['#070C28','#26366F'],grass:'#2F6B4A',dirt:'#4A3A2C',stone:'#434A5A',sun:'#EDEFFF',leaf:'#1E4A3A',stars:40},
+ nether:{sky:['#2E0707','#93301A'],grass:'#7A2020',dirt:'#4E2020',stone:'#3B2A2A',sun:'#FFB05A',leaf:'#5A1A1A',stars:0}
+};
+function hex(h){return [parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)]}
+function mix(a,b,t){var A=hex(a),B=hex(b);return 'rgb('+A.map(function(v,i){return Math.round(v+(B[i]-v)*t)}).join(',')+')'}
+function rng(seed){var a=seed>>>0;return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function paint(cv,key,seed){
+ var W=192,H=108,B=6,s=SC[key],r=rng(seed*7919+13);
+ cv.width=W;cv.height=H;var x=cv.getContext('2d');
+ for(var y=0;y<H;y+=B){x.fillStyle=mix(s.sky[0],s.sky[1],y/(H*0.75));x.fillRect(0,y,W,B)}
+ for(var i=0;i<s.stars;i++){x.fillStyle='rgba(255,255,255,'+(0.4+r()*0.6)+')';x.fillRect(Math.floor(r()*W),Math.floor(r()*H*0.45),2,2)}
+ x.fillStyle=s.sun;var sx=Math.floor(r()*18+10)*B-6;x.fillRect(W-sx>W-24?W-60:sx,B*2,B*3,B*3);
+ var cols=W/B,hs=[];
+ for(var c=0;c<cols;c++){hs.push(Math.round(11+Math.sin(c*0.33+seed)*2.2+Math.sin(c*0.9+seed*2)*0.9+r()*0.7))}
+ for(c=0;c<cols;c++){
+  var top=hs[c]*B,px=c*B;
+  for(var yy=top;yy<H;yy+=B){
+   var d=(yy-top)/B,col=d===0?s.grass:(d<4?s.dirt:s.stone);
+   x.fillStyle=col;x.fillRect(px,yy,B,B);
+   x.fillStyle='rgba(0,0,0,.14)';x.fillRect(px+Math.floor(r()*4),yy+Math.floor(r()*4),2,2);
+   x.fillStyle='rgba(255,255,255,.07)';x.fillRect(px+Math.floor(r()*4),yy+Math.floor(r()*4),2,2);
+  }
+ }
+ for(c=2;c<cols-3;c+=1){
+  if(r()<0.13){
+   var t=hs[c]*B;x.fillStyle='#6B4A2B';x.fillRect(c*B,t-B*2,B,B*2);
+   x.fillStyle=s.leaf;x.fillRect((c-1)*B,t-B*4,B*3,B*2);x.fillRect(c*B,t-B*5,B,B);
+   x.fillStyle='rgba(0,0,0,.14)';x.fillRect((c-1)*B+2,t-B*4+2,2,2);
+   c+=3;
+  }
+ }
+}
+
+/* ---------- hesap ---------- */
+var acct={name:'Mustafa',type:'ms'};
+function drawHead(){
+ var g=['HHHHHHHH','HHHHHHHH','HSSSSSSH','SSSSSSSS','SWESSEWS','SSSSSSSS','SSSMMSSS','SSSSSSSS'];
+ var hair=acct.type==='ms'?'#3B2A20':'#7A4B1E',m={H:hair,S:'#C99672',W:'#FFFFFF',E:'#3A4FD6',M:'#A0614A'};
+ var cv=$('#head'),x=cv.getContext('2d');
+ g.forEach(function(row,y){row.split('').forEach(function(ch,i){x.fillStyle=m[ch];x.fillRect(i,y,1,1)})});
+}
+function setAcct(){
+ $('#acctName').textContent=acct.name;
+ $('#acctType').textContent=acct.type==='ms'?'Microsoft hesabı':'Alternatif (çevrimdışı)';
+ drawHead();
+ var n=$('#acctNote');
+ n.textContent=acct.type==='ms'
+  ?'Hesabın: '+acct.name+' · Microsoft. Karma girişli server’da şifresiz girersin.'
+  :'Hesabın: '+acct.name+' · Alternatif. Server karma girişe açık olduğu için şifreyle girebilirsin.';
+}
+
+/* ---------- toast, kopyala ---------- */
+var tt;
+function toast(m){var t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(tt);tt=setTimeout(function(){t.classList.remove('show')},2600)}
+document.addEventListener('click',function(e){
+ var b=e.target.closest('[data-copy]');if(!b)return;
+ var el=$('#'+b.dataset.copy),txt=el.textContent;
+ var ok=function(){toast('Panoya kopyalandı')};
+ try{navigator.clipboard.writeText(txt).then(ok,function(){toast('Kopyalanamadı, metni elle seç')})}catch(err){toast('Kopyalanamadı, metni elle seç')}
+});
+
+/* ---------- tema ---------- */
+function setSkin(k){
+ document.body.dataset.skin=k;
+ $$('.skins button').forEach(function(b){b.setAttribute('aria-pressed',b.dataset.skin===k)});
+ try{localStorage.setItem('kazma-skin',k)}catch(e){}
+}
+$$('.skins button').forEach(function(b){b.addEventListener('click',function(){setSkin(b.dataset.skin)})});
+try{var sv=localStorage.getItem('kazma-skin');if(sv&&['obsidian','terminal'].indexOf(sv)>-1)setSkin(sv)}catch(e){}
+
+/* ---------- gezinme ---------- */
+var VIEWS=['home','library','servers','join','mods'];
+function route(){
+ var h=(location.hash||'').slice(1);if(VIEWS.indexOf(h)<0)h='home';
+ VIEWS.forEach(function(v){$('#v-'+v).hidden=v!==h});
+ $$('.nav button').forEach(function(b){if(b.dataset.go===h)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
+ $('#main').scrollTop=0;
+ if(h==='servers')drawStats();
+}
+document.addEventListener('click',function(e){
+ var b=e.target.closest('[data-go]');if(!b)return;
+ try{location.hash=b.dataset.go}catch(err){}
+ route();
+});
+addEventListener('hashchange',route);
+
+/* ---------- başlatma penceresi ---------- */
+var launching=false;
+async function launch(name,steps){
+ if(launching)return;launching=true;
+ $('#launchTitle').textContent=name;
+ var list=steps||['Java 21 hazırlanıyor','Kütüphane ve asset’ler doğrulanıyor','Modlar yükleniyor','Oyun penceresi açılıyor'];
+ var box=$('#launchSteps');
+ box.innerHTML=list.map(function(s,i){return '<div class="step" id="ls'+i+'"><span class="m"></span><span>'+s+'</span></div>'}).join('');
+ $('#launchBar').style.width='0%';
+ $('#launchModal').hidden=false;
+ for(var i=0;i<list.length;i++){
+  var el=$('#ls'+i);el.className='step on';
+  await sleep(700);
+  el.className='step done';el.querySelector('.m').innerHTML=ic('check',13);
+  $('#launchBar').style.width=Math.round((i+1)/list.length*100)+'%';
+ }
+ $('#launchTitle').textContent=name+' hazır';
+ launching=false;
+}
+$('#launchClose').addEventListener('click',function(){$('#launchModal').hidden=true;launching=false});
+$('#heroPlay').addEventListener('click',function(){launch('Survival Dostlar')});
+
+/* ---------- kütüphane ---------- */
+var INST=[
+ {n:'Survival Dostlar',l:'Fabric',v:'1.21.1',m:47,t:'Dün 23:48',sc:'day',seed:3,srv:'Dostlar SMP'},
+ {n:'Create: Gökyüzü Fabrikası',l:'NeoForge',v:'1.21.1',m:112,t:'2 gün önce',sc:'dusk',seed:11},
+ {n:'Vanilla+',l:'Fabric',v:'1.21.4',m:18,t:'5 gün önce',sc:'night',seed:5},
+ {n:'Hardcore 1.20.1',l:'Forge',v:'1.20.1',m:64,t:'Geçen hafta',sc:'nether',seed:8}
+];
+$('#instGrid').innerHTML=INST.map(function(it,i){
+ return '<article class="card inst"><div class="thumb"><canvas data-i2="'+i+'" aria-hidden="true"></canvas></div><div class="body"><h3>'+it.n+'</h3>'+
+ '<div class="meta"><span class="pill mute">'+it.l+'</span><span class="pill mute">'+it.v+'</span><span class="pill mute">'+it.m+' mod</span>'+(it.srv?'<span class="pill acc">'+it.srv+'</span>':'')+'</div>'+
+ '<div class="foot"><span>'+it.t+'</span><button class="btn primary sm" data-play="'+i+'">'+ic('play',14)+'Oyna</button></div></div></article>';
+}).join('')+'<button class="add" id="addInst2"><span>'+ic('plus',28)+'</span>Yeni instance oluştur<small class="hint">Sürüm, mod yükleyici ve Java seç</small></button>';
+$$('canvas[data-i2]').forEach(function(cv){var it=INST[cv.dataset.i2];paint(cv,it.sc,it.seed)});
+paint($('#heroCv'),INST[0].sc,INST[0].seed);
+$('#instGrid').addEventListener('click',function(e){
+ var b=e.target.closest('[data-play]');if(b){launch(INST[b.dataset.play].n);return}
+ if(e.target.closest('.add'))toast('Prototipte instance sihirbazı yok. İlk sürümde sürüm, yükleyici ve Java seçimi burada olacak');
+});
+$('#newInst').addEventListener('click',function(){toast('Prototipte instance sihirbazı yok')});
+$('#newSrv').addEventListener('click',function(){toast('Server sihirbazı: yazılım, sürüm, RAM, port. İlk sürümde burada')});
+
+/* ---------- server: durum, istatistik, konsol ---------- */
+var S={st:'running',tps:[],ram:[],cpu:[],up:134,n:30};
+for(var i=0;i<S.n;i++){S.tps.push(19.6+Math.random()*0.4);S.ram.push(3+Math.random()*0.5);S.cpu.push(14+Math.random()*10)}
+function spark(id,data,max){
+ var el=$('#'+id),w=el.clientWidth||140,h=36;
+ el.setAttribute('viewBox','0 0 '+w+' '+h);
+ var pts=data.map(function(v,i){return [i/(data.length-1)*w,h-3-(Math.min(v,max)/max)*(h-8)]});
+ var line=pts.map(function(p){return p[0].toFixed(1)+','+p[1].toFixed(1)}).join(' ');
+ var last=pts[pts.length-1];
+ el.innerHTML='<line x1="0" y1="'+(h-1)+'" x2="'+w+'" y2="'+(h-1)+'" stroke="var(--line)"/><polygon points="0,'+h+' '+line+' '+w+','+h+'" fill="var(--accent)" opacity=".15"/><polyline points="'+line+'" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linejoin="round"/><circle cx="'+(last[0]-2).toFixed(1)+'" cy="'+last[1].toFixed(1)+'" r="2.8" fill="var(--accent)"/>';
+}
+function drawStats(){
+ if($('#v-servers').hidden)return;
+ var run=S.st==='running';
+ var tps=S.tps[S.tps.length-1],ram=S.ram[S.ram.length-1],cpu=S.cpu[S.cpu.length-1];
+ $('#vTps').textContent=run?tps.toFixed(1):'–';
+ $('#vRam').innerHTML=run?ram.toFixed(1)+' <small>/ 6 GB</small>':'– <small>/ 6 GB</small>';
+ $('#vCpu').innerHTML=run?Math.round(cpu)+' <small>%</small>':'– <small>%</small>';
+ $('#vPly').innerHTML=(run?3:0)+' <small>/ 20</small>';
+ $('#vUp').textContent=run?Math.floor(S.up/60)+' sa '+(S.up%60)+' dk':'Kapalı';
+ spark('spTps',S.tps,20);spark('spRam',S.ram,6);spark('spCpu',S.cpu,100);
+}
+setInterval(function(){
+ var run=S.st==='running';
+ S.tps.push(run?19.5+Math.random()*0.5:0);S.ram.push(run?Math.max(2.6,Math.min(4.6,S.ram[S.ram.length-1]+(Math.random()-0.5)*0.35)):0);S.cpu.push(run?Math.max(8,Math.min(48,S.cpu[S.cpu.length-1]+(Math.random()-0.5)*9)):0);
+ ['tps','ram','cpu'].forEach(function(k){if(S[k].length>S.n)S[k].shift()});
+ drawStats();
+},1500);
+setInterval(function(){if(S.st==='running')S.up++},60000);
+
+function stamp(){var d=new Date();return [d.getHours(),d.getMinutes(),d.getSeconds()].map(function(n){return String(n).padStart(2,'0')}).join(':')}
+function log(cls,txt,srcTag){
+ var con=$('#con'),d=document.createElement('div');
+ var t=document.createElement('span');t.className='t';t.textContent='['+stamp()+'] ';
+ var m=document.createElement('span');if(cls)m.className=cls;m.textContent=(srcTag===false?'':'[Server thread/'+(cls==='w'?'WARN':'INFO')+']: ')+txt;
+ d.appendChild(t);d.appendChild(m);con.appendChild(d);
+ while(con.children.length>200)con.removeChild(con.firstChild);
+ con.scrollTop=con.scrollHeight;
+}
+['Starting minecraft server version 1.21.1','Loading Fabric Loader 0.16.9 with 47 mods','Preparing spawn area: 94%','Done (4.213s)! For help, type "help"'].forEach(function(l){log('',l)});
+log('j','Zeynep joined the game');log('j','Efe_Kral joined the game');log('c','<Zeynep> demir çiftliği bitti, gelin bakın');
+var POOL=[['c','<Mustafa> create makinesini kurdum, çarklar dönüyor'],['','Saved the game'],['w','Can\'t keep up! Is the server overloaded? Running 2312ms behind, skipping 46 tick(s)'],['c','<Efe_Kral> hangi koordinatta buluşuyoruz?'],['','[Kazma] Otomatik yedek alındı (412 MB)'],['c','<Zeynep> bu modpack çok rahat indi, teşekkürler']];
+var pi=0;
+setInterval(function(){if(S.st!=='running')return;var p=POOL[pi++%POOL.length];log(p[0],p[1])},4200);
+
+function setSt(st){
+ S.st=st;var p=$('#srvPill');
+ p.className='pill '+(st==='running'?'good':st==='starting'?'warn':'bad');
+ p.innerHTML='<i class="dot"></i>'+(st==='running'?'Çalışıyor':st==='starting'?'Başlatılıyor':'Durduruldu');
+ $('#srvStart').disabled=st!=='stopped';$('#srvStop').disabled=st==='stopped';$('#srvRestart').disabled=st==='stopped';
+ drawStats();
+}
+async function stopSrv(){setSt('stopped');log('w','Stopping the server');await sleep(300);log('','Saving worlds');log('','ThreadedAnvilChunkStorage: All dimensions are saved')}
+async function startSrv(){
+ setSt('starting');log('','Starting minecraft server version 1.21.1');
+ await sleep(1200);log('','Loading Fabric Loader 0.16.9 with 47 mods');await sleep(1300);log('','Done (4.2s)! For help, type "help"');
+ S.up=0;setSt('running');
+}
+$('#srvStop').addEventListener('click',stopSrv);
+$('#srvStart').addEventListener('click',startSrv);
+$('#srvRestart').addEventListener('click',async function(){await stopSrv();await sleep(900);await startSrv()});
+$('#cmdForm').addEventListener('submit',function(e){
+ e.preventDefault();var i=$('#cmdIn'),v=i.value.trim();if(!v)return;
+ log('c','> '+v,false);
+ if(S.st!=='running')log('e','Server çalışmıyor, komut gönderilmedi.',false);
+ else if(/^say /.test(v))log('c','[Server] '+v.slice(4),false);
+ else if(v==='list')log('','There are 3 of a max of 20 players online: Mustafa, Zeynep, Efe_Kral');
+ else log('','Komut server’a iletildi (prototip).');
+ i.value='';
+});
+
+/* sekmeler */
+$$('[data-tab]').forEach(function(b){b.addEventListener('click',function(){
+ $$('[data-tab]').forEach(function(x){var on=x===b;x.setAttribute('aria-selected',on);$('#p-'+x.dataset.tab).hidden=!on});
+ drawStats();
+})});
+
+/* server modları + manifest */
+var SM=[
+ ['Fabric API','0.105.0+1.21.1','ikisi'],['Sodium','0.6.0','istemci'],['Lithium','0.13.1','ikisi'],['Create','6.0.4','ikisi'],['FerriteCore','7.0.0','ikisi'],['Xaero’s Minimap','24.5.1','istemci'],['Mod Menu','11.0.3','istemci']
+];
+var srvOn={};SM.forEach(function(m){srvOn[m[0]]=true});
+var SHA={'Fabric API':'9f2c…e41a','Sodium':'c07b…1d92','Lithium':'5ae8…b730','Create':'71d4…0c5f','FerriteCore':'2b9e…a6d1','Xaero’s Minimap':'e83a…47bc','Mod Menu':'14f0…8e2d'};
+function renderSrvMods(){
+ $('#srvMods').innerHTML=SM.map(function(m,i){
+  return '<div class="row"><div class="grow"><b>'+m[0]+'</b><small class="mono">'+m[1]+'</small></div><span class="pill mute">'+m[2]+'</span><button class="switch" role="switch" aria-checked="'+srvOn[m[0]]+'" data-sm="'+i+'" aria-label="'+m[0]+' etkin"></button></div>';
+ }).join('')+'<div class="row"><div class="grow hint">+ 40 mod daha. Tamamı manifestte yer alır.</div></div>';
+ var on=SM.filter(function(m){return srvOn[m[0]]});
+ var js='{\n  <span class="k">"ad"</span>: <span class="s">"Dostlar SMP"</span>,\n  <span class="k">"oyun"</span>: <span class="s">"1.21.1"</span>,\n  <span class="k">"loader"</span>: { <span class="k">"tip"</span>: <span class="s">"fabric"</span>, <span class="k">"sürüm"</span>: <span class="s">"0.16.9"</span> },\n  <span class="k">"modlar"</span>: [\n'+
+ on.slice(0,4).map(function(m){return '    { <span class="k">"id"</span>: <span class="s">"'+m[0].toLowerCase().replace(/[^a-z]+/g,'-')+'"</span>, <span class="k">"sürüm"</span>: <span class="s">"'+m[1]+'"</span>, <span class="k">"sha512"</span>: <span class="s">"'+SHA[m[0]]+'"</span>, <span class="k">"taraf"</span>: <span class="s">"'+m[2]+'"</span> }'}).join(',\n')+
+ ',\n    …\n  ],\n  <span class="k">"toplam"</span>: <span class="n">'+(40+on.length)+'</span>,\n  <span class="k">"imza"</span>: <span class="s">"ed25519:3Kq9…Zt2w"</span>\n}';
+ $('#manifest').innerHTML=js;
+ $$('.pill.acc',$('#p-modlar'))[0].textContent=(40+on.length)+' mod';
+}
+renderSrvMods();
+$('#srvMods').addEventListener('click',function(e){
+ var b=e.target.closest('[data-sm]');if(!b)return;
+ var m=SM[b.dataset.sm];srvOn[m[0]]=!srvOn[m[0]];renderSrvMods();
+ toast(m[0]+(srvOn[m[0]]?' etkinleştirildi':' kapatıldı')+', manifest güncellendi');
+});
+
+/* erişim */
+var mixOn=true;
+$('#mixSw').addEventListener('click',function(){
+ mixOn=!mixOn;this.setAttribute('aria-checked',mixOn);
+ $('#mixNote').innerHTML=mixOn
+  ?'Karma giriş açık. Kimlik sahteciliğine karşı giriş koruması etkin: <code>online-mode=false</code> yazılır, kayıt ve giriş komutları eklenir.'
+  :'Karma giriş kapalı. Yalnızca Microsoft hesabı doğrulanan oyuncular girebilir: <code>online-mode=true</code>.';
+ var pill=$('#mixPill');pill.textContent=mixOn?'Karma giriş açık':'Yalnızca Microsoft';
+ toast(mixOn?'Alternatif launcher’lar da girebilecek':'Alternatif launcher’lar artık giremez');
+});
+var TUN={upnp:['95.12.34.56:25565','Router’da port otomatik açılır. Çoğu ev bağlantısında çalışır.'],tunnel:['dostlar-smp.tunel.example','Port açmana gerek yok. Arkadaşların tünel adresi üzerinden bağlanır.'],manual:['95.12.34.56:25565','Portu router’da sen yönlendirirsin. Kazma yalnızca adresi gösterir.']};
+$('#tunSeg').addEventListener('click',function(e){
+ var b=e.target.closest('[data-tun]');if(!b)return;
+ $$('#tunSeg button').forEach(function(x){x.setAttribute('aria-pressed',x===b)});
+ var t=TUN[b.dataset.tun];$('#srvAddr').textContent=t[0];$('#invite').textContent='kazma://join/'+t[0];$('#tunHint').textContent=t[1];
+});
+
+/* ---------- katıl: mod eşitleme ---------- */
+var SYNC=[
+ {n:'Create',v:'6.0.4',s:'new',z:'48.2 MB'},
+ {n:'Xaero’s Minimap',v:'24.5.1',s:'new',z:'2.1 MB'},
+ {n:'Lithium',v:'0.13.0 → 0.13.1',s:'update',z:'0.9 MB'},
+ {n:'Fabric API',v:'0.104.0 → 0.105.0',s:'update',z:'2.3 MB'},
+ {n:'Sodium',v:'0.6.0',s:'ok',z:''},
+ {n:'Iris Shaders',v:'1.8.0',s:'keep',z:'',note:'Yalnızca istemci modu. Server istemiyor, yerelde kalır.'},
+ {n:'OptiFine_HD_U_J1.jar',v:'',s:'remove',z:'',note:'Fabric ile uyumsuz, devre dışı bırakılır.'}
+];
+var ST={ok:['good','Hazır'],new:['warn','İndirilecek'],update:['warn','Güncellenecek'],keep:['mute','Yerelde kalır'],remove:['bad','Devre dışı olacak'],busy:['acc','İndiriliyor'],gone:['mute','Devre dışı']};
+function renderSync(){
+ $('#sync').innerHTML=SYNC.map(function(r,i){
+  var st=ST[r.s];
+  return '<div class="srow"><div><b>'+r.n+'</b><small class="mono">'+(r.v||'')+'</small>'+(r.note?'<small>'+r.note+'</small>':'')+'<div class="bar" id="b'+i+'" style="display:none"><i></i></div></div><span class="pill '+st[0]+'" id="p'+i+'">'+st[1]+'</span><span class="sz tn">'+r.z+'</span></div>';
+ }).join('');
+ var c={ok:39,new:2,update:2};
+ $('#sumGrid').innerHTML=[['47','serverda mod'],['39','zaten hazır'],['2','indirilecek'],['2','güncellenecek'],['53.5 MB','toplam indirme']].map(function(x){return '<div class="sum"><b class="tn">'+x[0]+'</b><span>'+x[1]+'</span></div>'}).join('');
+}
+renderSync();
+function gate(){var on=$('#trust').checked;$('#syncBtn').disabled=!on;$('#syncHint').textContent=on?'Hazır. Eşitleme birkaç saniye sürer.':'Devam etmek için onay kutusunu işaretle.'}
+$('#trust').addEventListener('change',gate);
+$('#queryBtn').addEventListener('click',async function(){
+ var b=this;b.disabled=true;b.lastChild.textContent='Sorgulanıyor…';
+ await sleep(900);renderSync();$('#trust').checked=false;gate();
+ b.disabled=false;b.lastChild.textContent='Server’ı sorgula';toast('Dostlar SMP manifesti alındı, imza geçerli');
+});
+$('#queryBtn').innerHTML=ic('refresh',18)+'Server’ı sorgula';
+var syncing=false,synced=false;
+$('#syncBtn').addEventListener('click',async function(){
+ if(synced){launch('Dostlar SMP',['Java 21 hazırlanıyor','Fabric profili seçiliyor','47 mod yükleniyor','dostlar-smp sunucusuna bağlanılıyor']);return}
+ if(syncing)return;syncing=true;this.disabled=true;$('#trust').disabled=true;
+ for(var i=0;i<SYNC.length;i++){
+  var r=SYNC[i];
+  if(r.s==='new'||r.s==='update'){
+   var bar=$('#b'+i);bar.style.display='block';var fill=bar.firstChild;
+   var p=$('#p'+i);p.className='pill acc';p.textContent='İndiriliyor';
+   for(var k=1;k<=5;k++){fill.style.width=(k*20)+'%';await sleep(150)}
+   p.className='pill good';p.textContent='Hazır';bar.style.display='none';r.s='ok';
+  }else if(r.s==='remove'){
+   $('#p'+i).className='pill mute';$('#p'+i).textContent='Devre dışı';r.s='gone';
+  }
+ }
+ syncing=false;synced=true;
+ var b=$('#syncBtn');b.disabled=false;b.innerHTML=ic('play',18)+'Oyunu başlat ve bağlan';
+ $('#syncHint').textContent='Tüm modlar server’la aynı. Sorun yok.';toast('Modlar eşitlendi');
+});
+$('#syncBtn').innerHTML=ic('download',18)+'Eşitle ve katıl';
+
+/* ---------- mod gezgini ---------- */
+var MODS=[
+ {n:'Sodium',d:'Modern oluşturma motoru. Kare hızını belirgin artırır.',c:'Performans',side:'İstemci',col:'#4FE0C2'},
+ {n:'Lithium',d:'Oyun mantığını ve server tick süresini hızlandırır.',c:'Performans',side:'İkisi',col:'#7CD6FF'},
+ {n:'FerriteCore',d:'Bellek kullanımını düşürür, büyük modpack’lerde fark eder.',c:'Performans',side:'İkisi',col:'#9BE37A'},
+ {n:'Iris Shaders',d:'Shader paketlerini Sodium ile birlikte çalıştırır.',c:'Görsel',side:'İstemci',col:'#FF9AD5'},
+ {n:'Create',d:'Çarklar, dişliler ve konveyörlerle mekanik otomasyon.',c:'Teknoloji',side:'İkisi',col:'#F5B94A'},
+ {n:'Xaero’s Minimap',d:'Mini harita, waypoint ve oyuncu takibi.',c:'Harita',side:'İstemci',col:'#8FD3FF'},
+ {n:'Mod Menu',d:'Oyun içinde yüklü modların listesi ve ayarları.',c:'Araçlar',side:'İstemci',col:'#C9B3FF'},
+ {n:'Fabric API',d:'Fabric modlarının çoğunun ihtiyaç duyduğu temel kütüphane.',c:'Araçlar',side:'İkisi',col:'#E8C07A'}
+];
+var cat='Tümü',tgt='Survival Dostlar',have={};
+var CATS=['Tümü','Performans','Teknoloji','Görsel','Harita','Araçlar'];
+$('#catChips').innerHTML=CATS.map(function(c){return '<button class="chip" aria-pressed="'+(c===cat)+'" data-c="'+c+'">'+c+'</button>'}).join('');
+function modIcon(col,seed){
+ var cv=document.createElement('canvas');cv.width=8;cv.height=8;cv.className='ic';var x=cv.getContext('2d'),r=rng(seed*31+5);
+ for(var yy=0;yy<8;yy++)for(var xx=0;xx<8;xx++){x.fillStyle=mix('#10141c',col,0.25+r()*0.75);x.fillRect(xx,yy,1,1)}
+ return cv;
+}
+function renderMods(){
+ var q=$('#modQ').value.trim().toLowerCase();
+ var list=MODS.filter(function(m){return (cat==='Tümü'||m.c===cat)&&(!q||m.n.toLowerCase().indexOf(q)>-1||m.d.toLowerCase().indexOf(q)>-1)});
+ var box=$('#modList');box.innerHTML='';
+ if(!list.length){box.innerHTML='<div class="card hint">Eşleşen mod yok. Aramayı kısaltmayı ya da kategoriyi “Tümü” yapmayı dene.</div>';return}
+ list.forEach(function(m,i){
+  var k=m.n+'|'+tgt,done=have[k];
+  var a=document.createElement('article');a.className='card mod';
+  a.appendChild(modIcon(m.col,i+m.n.length));
+  var tx=document.createElement('div');tx.className='tx';
+  tx.innerHTML='<h3>'+m.n+'</h3><p>'+m.d+'</p><div class="acts"><span class="pill mute">'+m.c+'</span><span class="pill mute">'+m.side+'</span><span class="pill mute">Modrinth</span></div>';
+  a.appendChild(tx);
+  var btn=document.createElement('button');btn.className='btn sm'+(done?'':' primary');btn.style.alignSelf='flex-start';
+  btn.innerHTML=done?ic('check',14)+'Eklendi':ic('plus',14)+'Ekle';btn.disabled=!!done;
+  btn.addEventListener('click',function(){have[k]=true;renderMods();toast(m.n+' → '+tgt+(tgt==='Dostlar SMP'?' eklendi, manifest güncellendi':' eklendi'))});
+  a.appendChild(btn);box.appendChild(a);
+ });
+}
+$('#catChips').addEventListener('click',function(e){var b=e.target.closest('[data-c]');if(!b)return;cat=b.dataset.c;$$('#catChips .chip').forEach(function(x){x.setAttribute('aria-pressed',x===b)});renderMods()});
+$('#tgtSeg').addEventListener('click',function(e){var b=e.target.closest('[data-t]');if(!b)return;tgt=b.dataset.t;$$('#tgtSeg button').forEach(function(x){x.setAttribute('aria-pressed',x===b)});renderMods()});
+$('#modQ').addEventListener('input',renderMods);
+renderMods();
+
+/* ---------- giriş penceresi ---------- */
+var lmode='ms';
+$('#acctBtn').addEventListener('click',function(){$('#loginModal').hidden=false;$('#offErr').textContent=''});
+$('#loginCancel').addEventListener('click',function(){$('#loginModal').hidden=true});
+$('#loginSeg').addEventListener('click',function(e){
+ var b=e.target.closest('[data-l]');if(!b)return;lmode=b.dataset.l;
+ $$('#loginSeg button').forEach(function(x){x.setAttribute('aria-pressed',x===b)});
+ $('#lg-ms').style.display=lmode==='ms'?'flex':'none';$('#lg-off').style.display=lmode==='off'?'flex':'none';
+ $('#loginOk').textContent=lmode==='ms'?'Giriş yaptım':'Çevrimdışı devam et';
+});
+$('#loginOk').addEventListener('click',function(){
+ if(lmode==='ms'){acct={name:'Mustafa',type:'ms'}}
+ else{
+  var v=$('#offName').value.trim();
+  if(!/^[A-Za-z0-9_]{3,16}$/.test(v)){$('#offErr').textContent='Ad 3–16 karakter olmalı; yalnızca harf, rakam ve alt çizgi kullan.';$('#offName').focus();return}
+  acct={name:v,type:'off'};
+  try{if(window.__TAURI__&&window.__TAURI__.core){window.__TAURI__.core.invoke('offline_account',{name:v}).then(function(a){acct.uuid=a.uuid})}}catch(e){}
+ }
+ setAcct();$('#loginModal').hidden=true;toast(acct.type==='ms'?'Microsoft hesabıyla giriş yapıldı':acct.name+' olarak çevrimdışı devam ediliyor');
+});
+addEventListener('keydown',function(e){if(e.key==='Escape'){$('#loginModal').hidden=true}});
+
+setAcct();route();
+addEventListener('resize',drawStats);
+})();
+</script>
+</body>
+</html>
