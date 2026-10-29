@@ -8,7 +8,8 @@ Temalar: Obsidian, Terminal.
 
 | Klasör | İçerik | Durum |
 |---|---|---|
-| `crates/kazma-core` | Saf Rust çekirdek: Mojang manifesti, çevrimdışı UUID, davet ayrıştırma, mod manifesti + eşitleme planı, SHA-512 doğrulama, Ed25519 imza | 19 test geçiyor (`cargo test`) |
+| `crates/kazma-core` | Saf Rust çekirdek: sürüm JSON'u ve kurallar, Fabric profil birleştirme, indirme planı, başlatma komutu, Java (Adoptium), çevrimdışı UUID, davet ayrıştırma, mod manifesti + eşitleme planı, SHA-512 doğrulama, Ed25519 imza | 41 test geçiyor (`cargo test`) |
+| `crates/kazma-cli` | Komut satırından indirip oyunu çevrimdışı hesapla başlatır | 4 birim testi geçiyor; canlı çalıştırma Windows'ta denenecek |
 | `src-tauri` | Tauri 2 kabuğu, çekirdek fonksiyonları arayüze komut olarak açar | Yazıldı, bu ortamda derlenmedi (Windows gerekir) |
 | `ui` | Arayüz (Obsidian ve Terminal temalı), şimdilik örnek verilerle | Prototip |
 
@@ -26,6 +27,19 @@ Temalar: Obsidian, Terminal.
    cargo tauri build                  # NSIS kurulum dosyası
    ```
 
+## Oyunu çevrimdışı hesapla başlatma
+
+```
+cargo run -p kazma-cli --release -- launch 1.21.1 Mustafa --fabric --ram 4096
+cargo run -p kazma-cli --release -- launch 1.21.1 Mustafa --join play.example.com:25565
+```
+
+İlk çalıştırmada sürüm dosyaları, kütüphaneler, asset'ler ve Java (Eclipse Temurin) indirilir; sonraki
+çalıştırmalar yalnızca eksikleri tamamlar. Her dosya SHA-1 ile, Java paketi SHA-256 ile doğrulanır.
+Dosyalar `%APPDATA%\.kazma` altına yazılır (`--root` ile değişir). Java'yı kendin vermek için `--java YOL`.
+
+Alternatif (çevrimdışı) hesapla yalnızca `online-mode=false` server'lara ve tek kişilik dünyaya girilebilir.
+
 ## Mod eşitleme akışı
 
 1. Server sahibi launcher'dan manifest üretir ve Ed25519 anahtarıyla imzalar (`sign::sign`).
@@ -40,9 +54,10 @@ Güvenlik kuralları testlerle sabitlenmiştir: yol atlatma (`../x.jar`), http a
 
 ## Sıradaki işler
 
+0. Doğrulama: komut satırı aracı Windows'ta gerçek bir 1.21.1 ve Fabric başlatmasıyla denenecek; çıkan hatalar düzeltilecek.
 1. Microsoft girişi: device code akışı (Microsoft → Xbox Live → XSTS → Minecraft hizmetleri). Kendi Azure uygulama kaydın gerekir.
-2. Sürüm kurulumu: `version.json` indirme, kütüphane kuralları, asset'ler, natives, Java 21 (Adoptium) kurulumu, başlatma komutu.
-3. Fabric/NeoForge kurulumu (`mojang::fabric_profile_url` hazır).
-4. Ağ katmanı: Tauri tarafında `reqwest` ile manifest ve dosya indirme (arayüz doğrudan indirmez).
+2. Tauri tarafına ağ katmanı: kazma-cli'deki indirme kodunu ortak bir kütüphaneye taşı, ilerleme olaylarını arayüze ilet.
+3. NeoForge/Forge/Quilt kurulumu.
+4. Eski sürümler: `map_to_resources` asset düzeni.
 5. Server yöneticisi: jar indirme, süreç başlatma, konsol akışı, UPnP/tünel, karma giriş eklentisi.
 6. Mod gezgini: Modrinth API v2.

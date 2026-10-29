@@ -1,0 +1,21 @@
+name: Windows derleme
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Testler
+        run: cargo test --workspace
+      - name: Derleme
+        run: cargo build -p kazma-cli --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kazma-cli-windows
+          path: |
+            target/release/kazma-cli.exe
+            scripts/kazma-oyna.bat

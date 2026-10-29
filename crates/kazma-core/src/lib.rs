@@ -3,10 +3,14 @@
 
 pub mod account;
 pub mod invite;
+pub mod java;
+pub mod launch;
 pub mod manifest;
 pub mod mojang;
+pub mod plan;
 pub mod sign;
 pub mod verify;
+pub mod version;
 
 use thiserror::Error;
 
