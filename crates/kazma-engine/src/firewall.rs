@@ -31,6 +31,12 @@ fn safe(s: &str) -> bool {
     !s.is_empty() && !s.chars().any(|c| matches!(c, '"' | '&' | '|' | '^' | '%' | '!' | '<' | '>' | '\'' | '`' | ';' | '\r' | '\n'))
 }
 
+/// Windows'ta bazı yollar `\\?\C:\...` biçiminde gelir; güvenlik duvarı bu öneki kabul etmez.
+pub fn plain_path(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    s.strip_prefix(r"\\?\UNC\").map(|r| format!(r"\\{r}")).or_else(|| s.strip_prefix(r"\\?\").map(String::from)).unwrap_or_else(|| s.to_string())
+}
+
 fn ps_single(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
@@ -69,7 +75,7 @@ pub fn status(_: &str, _: u16) -> Status {
 
 /// Yönetici olarak çalışacak betik: eksik kuralları ekler, sonucu `log` dosyasına yazar.
 pub fn build_script(id: &str, port: u16, kazma_exe: &Path, java_exe: &Path, need_kazma: bool, need_server: bool, log: &Path) -> R<String> {
-    let (k, j, l) = (kazma_exe.to_string_lossy(), java_exe.to_string_lossy(), log.to_string_lossy());
+    let (k, j, l) = (plain_path(kazma_exe), plain_path(java_exe), plain_path(log));
     if !safe(id) || !safe(&l) {
         return Err("Yol desteklenmeyen karakter içeriyor.".into());
     }
@@ -143,6 +149,15 @@ mod tests {
             assert!(build_script("x", 1, Path::new("k"), Path::new(bad), false, true, log).is_err(), "{bad}");
             assert!(build_script("x", 1, Path::new(bad), Path::new("j"), true, false, log).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn extended_prefix_is_removed() {
+        assert_eq!(plain_path(Path::new(r"\\?\C:\Users\a\Kazma.exe")), r"C:\Users\a\Kazma.exe");
+        assert_eq!(plain_path(Path::new(r"\\?\UNC\srv\share\k.exe")), r"\\srv\share\k.exe");
+        assert_eq!(plain_path(Path::new(r"C:\a\b.exe")), r"C:\a\b.exe");
+        let c = build_script("x", 25565, Path::new(r"\\?\C:\k\Kazma.exe"), Path::new(r"\\?\C:\j\java.exe"), true, true, Path::new(r"\\?\C:\t\l.txt")).unwrap();
+        assert!(!c.contains(r"\\?\"), "{c}");
     }
 
     #[test]
