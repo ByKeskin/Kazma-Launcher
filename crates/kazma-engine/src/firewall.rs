@@ -3,7 +3,9 @@
 
 use crate::net::R;
 use serde::Serialize;
+#[allow(unused_imports)]
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -29,71 +31,95 @@ fn safe(s: &str) -> bool {
     !s.is_empty() && !s.chars().any(|c| matches!(c, '"' | '&' | '|' | '^' | '%' | '!' | '<' | '>' | '\'' | '`' | ';' | '\r' | '\n'))
 }
 
+fn ps_single(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// PowerShell'e -EncodedCommand ile verilecek metin (UTF-16LE, base64): tırnak/kaçış sorunları olmaz.
+pub fn encode_command(script: &str) -> String {
+    use base64::Engine as _;
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
 #[cfg(windows)]
-fn netsh() -> Command {
+fn powershell() -> Command {
     use std::os::windows::process::CommandExt;
-    let mut c = Command::new("netsh");
-    c.creation_flags(0x0800_0000);
+    let mut c = Command::new("powershell");
+    c.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"]).creation_flags(0x0800_0000);
     c
 }
 
+/// Çıkış kodu bit alanı: 1 = Kazma kuralı var, 2 = server kuralı var.
 #[cfg(windows)]
-fn rule_exists(name: &str) -> bool {
-    netsh().args(["advfirewall", "firewall", "show", "rule", &format!("name={name}")]).output().map(|o| o.status.success()).unwrap_or(false)
+pub fn status(id: &str, port: u16) -> Status {
+    let script = format!(
+        "$c=0; if(Get-NetFirewallRule -DisplayName {} -ErrorAction SilentlyContinue){{$c+=1}}; if(Get-NetFirewallRule -DisplayName {} -ErrorAction SilentlyContinue){{$c+=2}}; exit $c",
+        ps_single(&kazma_rule()),
+        ps_single(&server_rule(id, port))
+    );
+    let code = powershell().args(["-EncodedCommand", &encode_command(&script)]).output().ok().and_then(|o| o.status.code()).unwrap_or(0);
+    Status { supported: true, kazma_ok: code & 1 != 0, server_ok: code & 2 != 0 }
 }
 
 #[cfg(not(windows))]
-fn rule_exists(_: &str) -> bool {
-    true
+pub fn status(_: &str, _: u16) -> Status {
+    Status { supported: false, kazma_ok: true, server_ok: true }
 }
 
-pub fn status(id: &str, port: u16) -> Status {
-    if !cfg!(windows) {
-        return Status { supported: false, kazma_ok: true, server_ok: true };
+/// Yönetici olarak çalışacak betik: eksik kuralları ekler, sonucu `log` dosyasına yazar.
+pub fn build_script(id: &str, port: u16, kazma_exe: &Path, java_exe: &Path, need_kazma: bool, need_server: bool, log: &Path) -> R<String> {
+    let (k, j, l) = (kazma_exe.to_string_lossy(), java_exe.to_string_lossy(), log.to_string_lossy());
+    if !safe(id) || !safe(&l) {
+        return Err("Yol desteklenmeyen karakter içeriyor.".into());
     }
-    Status { supported: true, kazma_ok: rule_exists(&kazma_rule()), server_ok: rule_exists(&server_rule(id, port)) }
-}
-
-/// Eklenecek `netsh` komutları (yönetici olarak çalıştırılacak tek bir `cmd /c` satırı).
-pub fn add_commands(id: &str, port: u16, kazma_exe: &Path, java_exe: &Path, need_kazma: bool, need_server: bool) -> R<String> {
-    let (k, j) = (kazma_exe.to_string_lossy(), java_exe.to_string_lossy());
-    let mut parts = Vec::new();
+    let mut body = String::new();
     if need_kazma {
         if !safe(&k) {
             return Err("Kazma'nın yolunda desteklenmeyen karakter var.".into());
         }
-        parts.push(format!("netsh advfirewall firewall add rule name=\"{}\" dir=in action=allow protocol=UDP program=\"{k}\" enable=yes profile=any", kazma_rule()));
+        let n = ps_single(&kazma_rule());
+        body += &format!("if(-not (Get-NetFirewallRule -DisplayName {n} -ErrorAction SilentlyContinue)){{New-NetFirewallRule -DisplayName {n} -Direction Inbound -Action Allow -Protocol UDP -Program {} -Profile Any | Out-Null}};", ps_single(&k));
     }
     if need_server {
-        if !safe(&j) || !safe(id) {
+        if !safe(&j) {
             return Err("Java yolunda desteklenmeyen karakter var.".into());
         }
-        parts.push(format!("netsh advfirewall firewall add rule name=\"{}\" dir=in action=allow protocol=TCP localport={port} program=\"{j}\" enable=yes profile=any", server_rule(id, port)));
+        let n = ps_single(&server_rule(id, port));
+        body += &format!("if(-not (Get-NetFirewallRule -DisplayName {n} -ErrorAction SilentlyContinue)){{New-NetFirewallRule -DisplayName {n} -Direction Inbound -Action Allow -Protocol TCP -LocalPort {port} -Program {} -Profile Any | Out-Null}};", ps_single(&j));
     }
-    if parts.is_empty() {
+    if body.is_empty() {
         return Err("Gerekli izinler zaten var.".into());
     }
-    Ok(parts.join(" & "))
+    Ok(format!("$ErrorActionPreference='Stop'; try {{ {body} 'ok' | Out-File -Encoding utf8 -LiteralPath {0} }} catch {{ $_.Exception.Message | Out-File -Encoding utf8 -LiteralPath {0} }}", ps_single(&l)))
 }
 
 #[cfg(windows)]
 pub fn allow(id: &str, port: u16, java_exe: &Path) -> R<Status> {
-    use std::os::windows::process::CommandExt;
     let st = status(id, port);
     let exe: PathBuf = std::env::current_exe().map_err(|e| e.to_string())?;
-    let cmdline = add_commands(id, port, &exe, java_exe, !st.kazma_ok, !st.server_ok)?;
-    // cmd /c "a & b" yönetici olarak: PowerShell Start-Process -Verb RunAs (Windows'un onay penceresi açılır).
-    let arg = format!("/c {cmdline}").replace('\'', "''");
-    let ps = format!("Start-Process -FilePath cmd.exe -ArgumentList '{arg}' -Verb RunAs -WindowStyle Hidden -Wait");
-    let out = Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &ps]).creation_flags(0x0800_0000).output().map_err(|e| e.to_string())?;
+    let log = std::env::temp_dir().join("kazma-firewall.txt");
+    let _ = std::fs::remove_file(&log);
+    let script = build_script(id, port, &exe, java_exe, !st.kazma_ok, !st.server_ok, &log)?;
+    let outer = format!(
+        "try {{ Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','{}' -Verb RunAs -WindowStyle Hidden -Wait }} catch {{ exit 7 }}",
+        encode_command(&script)
+    );
+    let out = powershell().args(["-EncodedCommand", &encode_command(&outer)]).output().map_err(|e| e.to_string())?;
     let after = status(id, port);
     if after.kazma_ok && after.server_ok {
-        Ok(after)
-    } else if !out.status.success() {
-        Err("Yönetici onayı verilmedi ya da iptal edildi.".into())
-    } else {
-        Err("Kural eklenemedi. Windows Güvenlik Duvarı'nı elle açıp Java'ya izin verebilirsin.".into())
+        return Ok(after);
     }
+    if out.status.code() == Some(7) {
+        return Err("Yönetici onayı verilmedi ya da iptal edildi.".into());
+    }
+    let detail = std::fs::read_to_string(&log).unwrap_or_default();
+    let detail = detail.trim_start_matches('\u{feff}').trim();
+    Err(if detail.is_empty() || detail == "ok" {
+        "Kural eklenemedi ve ayrıntı alınamadı. Windows Güvenlik Duvarı hizmeti kapalı olabilir.".to_string()
+    } else {
+        format!("Kural eklenemedi: {}", detail.chars().take(300).collect::<String>())
+    })
 }
 
 #[cfg(not(windows))]
@@ -106,16 +132,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn commands_are_built_and_unsafe_paths_rejected() {
-        let c = add_commands("kule-2", 25565, Path::new(r"C:\Users\a\Kazma.exe"), Path::new(r"C:\Users\a\.kazma\runtime\java.exe"), true, true).unwrap();
-        assert!(c.contains("protocol=UDP program=\"C:\\Users\\a\\Kazma.exe\"") && c.contains("localport=25565") && c.contains(" & "));
-        assert!(c.contains("name=\"Kazma Server kule-2 25565\""));
-        assert_eq!(add_commands("x", 25565, Path::new("a"), Path::new("b"), false, true).unwrap().matches("netsh").count(), 1);
-        assert!(add_commands("x", 25565, Path::new("a"), Path::new("b"), false, false).is_err());
-        for bad in [r#"C:\a" & calc & ".exe"#, "C:\\a|b.exe", "C:\\%PATH%\\x.exe", "a\nb"] {
-            assert!(add_commands("x", 1, Path::new("k"), Path::new(bad), false, true).is_err(), "{bad}");
-            assert!(add_commands("x", 1, Path::new(bad), Path::new("j"), true, false).is_err(), "{bad}");
+    fn script_is_built_and_unsafe_paths_rejected() {
+        let log = Path::new(r"C:\Temp\kazma-firewall.txt");
+        let c = build_script("kule-2", 25565, Path::new(r"C:\Users\a\Kazma.exe"), Path::new(r"C:\Users\a\.kazma\runtime\java.exe"), true, true, log).unwrap();
+        assert!(c.contains("-Protocol UDP -Program 'C:\\Users\\a\\Kazma.exe'") && c.contains("-LocalPort 25565") && c.contains("'Kazma Server kule-2 25565'"));
+        assert!(c.contains("catch") && c.contains("kazma-firewall.txt"));
+        assert_eq!(build_script("x", 25565, Path::new("a"), Path::new("b"), false, true, log).unwrap().matches("New-NetFirewallRule").count(), 1);
+        assert!(build_script("x", 25565, Path::new("a"), Path::new("b"), false, false, log).is_err());
+        for bad in ["C:\\a'; calc; '.exe", "C:\\a|b.exe", "C:\\%PATH%\\x.exe", "a\nb", "C:\\a\"b"] {
+            assert!(build_script("x", 1, Path::new("k"), Path::new(bad), false, true, log).is_err(), "{bad}");
+            assert!(build_script("x", 1, Path::new(bad), Path::new("j"), true, false, log).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn encoded_command_is_utf16_base64() {
+        assert_eq!(encode_command("a"), "YQA=");
+        assert_eq!(encode_command("exit 1"), "ZQB4AGkAdAAgADEA");
     }
 
     #[cfg(not(windows))]
