@@ -489,9 +489,9 @@ fn host_open_exports(state: State<'_, AppState>) -> CmdResult<()> {
 }
 
 #[tauri::command]
-async fn host_search(state: State<'_, AppState>, id: String, query: String) -> CmdResult<Vec<modrinth::Hit>> {
+async fn host_search(state: State<'_, AppState>, id: String, query: String, category: Option<String>) -> CmdResult<Vec<modrinth::Hit>> {
     let root = state.root.clone();
-    tauri::async_runtime::spawn_blocking(move || serverhost::search_content(&root, &id, &query)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || serverhost::search_content(&root, &id, &query, category.as_deref())).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -501,9 +501,45 @@ async fn host_install(handle: AppHandle, state: State<'_, AppState>, id: String,
 }
 
 #[tauri::command]
-async fn host_pack_code(handle: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<kazma_engine::serverkit::PackBuild> {
+async fn host_pack_code(handle: AppHandle, state: State<'_, AppState>, id: String, address: Option<String>) -> CmdResult<kazma_engine::serverkit::PackBuild> {
     let root = state.root.clone();
-    tauri::async_runtime::spawn_blocking(move || serverhost::pack_code(&root, &id, &Events(handle))).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || serverhost::pack_code(&root, &id, address, &Events(handle))).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn host_content(state: State<'_, AppState>, id: String) -> CmdResult<Vec<String>> {
+    serverhost::list_content(&state.root, &id)
+}
+
+#[tauri::command]
+fn host_remove_content(state: State<'_, AppState>, id: String, file: String) -> CmdResult<()> {
+    serverhost::remove_content(&state.root, &id, &file)
+}
+
+#[derive(Serialize)]
+struct ConnectInfo {
+    lan: Option<String>,
+    public: Option<String>,
+}
+
+/// Oyuncuların bağlanabileceği adresler: yerel ağ ve (biliniyorsa) dış adres.
+#[tauri::command]
+fn host_connect_info(state: State<'_, AppState>, id: String) -> CmdResult<ConnectInfo> {
+    let spec = serverhost::read_spec(&state.root, &id)?;
+    Ok(ConnectInfo { lan: serverhost::lan_ip().map(|ip| format!("{ip}:{}", spec.port)), public: spec.public_address })
+}
+
+/// Dış IP'yi kullanıcı isteyince bulur ve "IP:port" olarak kaydeder (router'da port yönlendirilmiş olmalı).
+#[tauri::command]
+async fn host_find_public(state: State<'_, AppState>, id: String) -> CmdResult<serverhost::ServerSpec> {
+    let root = state.root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let spec = serverhost::read_spec(&root, &id)?;
+        let ip = serverhost::public_ip()?;
+        serverhost::set_public_address(&root, &id, &format!("{ip}:{}", spec.port))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Otomatik port yönlendirmeyi aç/kapat (açıksa bir sonraki başlatmada uygulanır; çalışıyorsa hemen açılır).
@@ -603,6 +639,10 @@ fn main() {
             host_search,
             host_install,
             host_pack_code,
+            host_content,
+            host_remove_content,
+            host_connect_info,
+            host_find_public,
             host_upnp,
             host_set_address,
             tunnel_start,

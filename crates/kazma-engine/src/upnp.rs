@@ -114,31 +114,72 @@ pub fn from_location(location: &str, local_ip: Ipv4Addr, allow_loopback: bool) -
     Ok(Gateway { control_url: join_url(location, &control)?, service_type, local_ip })
 }
 
-/// SSDP ile yerel ağdaki router'ı bulur.
+const SEARCH_TARGETS: [&str; 4] = [
+    "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+    "urn:schemas-upnp-org:device:InternetGatewayDevice:2",
+    "urn:schemas-upnp-org:service:WANIPConnection:1",
+    "upnp:rootdevice",
+];
+
+/// Özel (LAN) IPv4 adresine sahip tüm ağ arayüzleri; sanal bağdaştırıcılar (VPN, WSL, Hyper-V) arasında doğru olanı bulmak için hepsi denenir.
+fn lan_interfaces() -> Vec<Ipv4Addr> {
+    let mut v: Vec<Ipv4Addr> = if_addrs::get_if_addrs()
+        .map(|l| l.into_iter().filter(|i| !i.is_loopback()).filter_map(|i| match i.ip() { IpAddr::V4(a) if a.is_private() => Some(a), _ => None }).collect())
+        .unwrap_or_default();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// SSDP ile yerel ağdaki router'ı bulur. Her LAN arayüzünden, birkaç arama türüyle denenir.
 pub fn discover(timeout: Duration) -> R<Gateway> {
-    let sock = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-    sock.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
-    let msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\r\n";
-    sock.send_to(msg.as_bytes(), "239.255.255.250:1900").map_err(|e| format!("Ağ taranamadı: {e}"))?;
-    let mut buf = [0u8; 2048];
+    let ifaces = lan_interfaces();
+    if ifaces.is_empty() {
+        return Err("Yerel ağ bağlantısı bulunamadı (Wi-Fi ya da Ethernet bağlı mı?).".into());
+    }
+    let socks: Vec<(Ipv4Addr, UdpSocket)> = ifaces
+        .iter()
+        .filter_map(|ip| {
+            let s = UdpSocket::bind(SocketAddr::new(IpAddr::V4(*ip), 0)).ok()?;
+            s.set_read_timeout(Some(Duration::from_millis(250))).ok()?;
+            Some((*ip, s))
+        })
+        .collect();
     let t0 = std::time::Instant::now();
+    let mut sent_rounds = 0;
+    let mut buf = [0u8; 2048];
+    let mut tried: Vec<String> = Vec::new();
     while t0.elapsed() < timeout {
-        let Ok((n, from)) = sock.recv_from(&mut buf) else { break };
-        let txt = String::from_utf8_lossy(&buf[..n]).to_string();
-        let loc = txt.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("location")).map(|(_, v)| v.trim().to_string()));
-        let Some(loc) = loc else { continue };
-        let (IpAddr::V4(gw_ip), Ok(u)) = (from.ip(), url::Url::parse(&loc)) else { continue };
-        // Yanıtı gönderen cihaz ile LOCATION'daki cihaz aynı olmalı.
-        if u.host_str() != Some(&gw_ip.to_string()) {
-            continue;
+        if sent_rounds < 2 && t0.elapsed() >= timeout / 2 * sent_rounds {
+            for (_, s) in &socks {
+                for st in SEARCH_TARGETS {
+                    let msg = format!("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: {st}\r\n\r\n");
+                    let _ = s.send_to(msg.as_bytes(), "239.255.255.250:1900");
+                }
+            }
+            sent_rounds += 1;
         }
-        let local = UdpSocket::bind("0.0.0.0:0").and_then(|s| s.connect(SocketAddr::new(IpAddr::V4(gw_ip), 1900)).map(|_| s)).and_then(|s| s.local_addr()).map_err(|e| e.to_string())?;
-        let IpAddr::V4(local_ip) = local.ip() else { continue };
-        if let Ok(g) = from_location(&loc, local_ip, false) {
-            return Ok(g);
+        for (local_ip, s) in &socks {
+            let Ok((n, from)) = s.recv_from(&mut buf) else { continue };
+            let txt = String::from_utf8_lossy(&buf[..n]).to_string();
+            let loc = txt.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("location")).map(|(_, v)| v.trim().to_string()));
+            let Some(loc) = loc else { continue };
+            // Yanıtı gönderen cihaz ile LOCATION'daki cihaz aynı olmalı.
+            let (IpAddr::V4(gw_ip), Ok(u)) = (from.ip(), url::Url::parse(&loc)) else { continue };
+            if u.host_str() != Some(&gw_ip.to_string()) || tried.contains(&loc) {
+                continue;
+            }
+            tried.push(loc.clone());
+            if let Ok(g) = from_location(&loc, *local_ip, false) {
+                return Ok(g);
+            }
         }
     }
-    Err("Router bulunamadı. UPnP kapalı olabilir ya da router'ın yerel ağında değilsin.".into())
+    Err(if tried.is_empty() {
+        "Router yanıt vermedi. Router'da UPnP kapalı olabilir, Windows Güvenlik Duvarı Kazma'yı engelliyor olabilir ya da router'ın yerel ağında değilsin.".into()
+    } else {
+        "Router bulundu ama UPnP port yönlendirme sunmuyor ya da kapalı.".into()
+    })
 }
 
 pub fn external_ip(gw: &Gateway) -> R<String> {
@@ -169,7 +210,7 @@ pub struct Opened {
 
 /// Router'ı bulur, portu açar, dış IP'yi doğrular. `public=false` ise (CGNAT/çift NAT) port açık olsa da internetten erişilemez.
 pub fn open_port(port: u16, name: &str) -> R<(Gateway, Opened)> {
-    let gw = discover(Duration::from_secs(4))?;
+    let gw = discover(Duration::from_secs(6))?;
     add_mapping(&gw, port, name, 0).or_else(|_| add_mapping(&gw, port, name, 3600))?;
     let ip = external_ip(&gw).unwrap_or_default();
     let public = is_public_ipv4(&ip);

@@ -159,3 +159,8 @@ Skinler sayfasında yalnızca Kazma'nın bildiği siteler kullanılır: Mojang (
 
 ## Discord etkinliği
 Hesap penceresinden Discord uygulama kimliği girilirse oyun açıkken "Kazma Launcher'da oynuyor" görünür. Kimlik için Discord Developer Portal'da bir uygulama oluştur; Rich Presence → Art Assets'e `assets/discord-large.png` dosyasını **kazma** adıyla yükle. Discord kapalıysa ya da kimlik boşsa hiçbir şey olmaz.
+
+## Server paneli notları
+- **Modlar/Eklentiler sekmesi:** Mod Gezgini gibi arama, kategori ve kartlar; yalnızca server'da çalışan dosyalar listelenir, kurulu olanlar altta görünür ve kaldırılabilir.
+- **Davet sekmesi:** dış adres, yerel ağ adresi (kopyala), isteğe bağlı "Dış IP'mi bul" ve mod eşitlemeli davet kodu.
+- **UPnP:** tüm yerel ağ arayüzlerinden (VPN/WSL/sanal bağdaştırıcılar dahil) ve birkaç arama türüyle router aranır.

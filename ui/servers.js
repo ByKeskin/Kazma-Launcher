@@ -122,11 +122,11 @@
     }
     function drawDetail() {
       var h = hostById(sel), st = STATE[h.state] || STATE.stopped;
-      var tabs = [['console', 'Konsol'], ['settings', 'Ayarlar'], ['mods', h.kind === 'paper' ? 'Eklentiler' : 'Modlar'], ['net', 'Bağlantı']].filter(function (t) { return !(h.mode === 'remote' && t[0] === 'console'); });
+      var tabs = [['console', 'Konsol'], ['settings', 'Ayarlar'], ['mods', h.kind === 'paper' ? 'Eklentiler' : 'Modlar'], ['invite', 'Davet'], ['net', 'Bağlantı']].filter(function (t) { return !(h.mode === 'remote' && t[0] === 'console'); });
       if (h.mode === 'remote' && tab === 'console') tab = 'settings';
       view.innerHTML =
         '<div class="ph"><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="btn sm" id="hBack">← Serverlar</button>' + dot(st[0], st[1]) + '<h1 style="margin:0">' + esc(h.name) + '</h1><span class="pill mute">' + esc(KIND[h.kind] || h.kind) + ' ' + esc(h.game) + '</span><span class="pill ' + (h.state === 'running' ? 'good' : 'mute') + '" id="hState">' + esc(st[1]) + '</span></div>' +
-        '<div style="display:flex;gap:8px;flex-wrap:wrap" id="hBtns">' + stateBtns(h) + '</div></div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap"><span id="hBtns" style="display:contents">' + stateBtns(h) + '</span><button class="btn" data-ht-go="invite">' + kz.ic('link', 16) + 'Davet / adres</button></div></div>' +
         '<div class="tabs" role="tablist">' + tabs.map(function (t) { return '<button role="tab" data-ht="' + t[0] + '" aria-selected="' + (tab === t[0]) + '">' + t[1] + '</button>'; }).join('') + '</div>' +
         '<div id="hBody" style="display:flex;flex-direction:column;gap:14px;margin-top:14px"></div>';
       $('#hBack').addEventListener('click', function () { sel = null; load(); });
@@ -138,6 +138,7 @@
       if (tab === 'console') return tabConsole(h, b);
       if (tab === 'settings') return tabSettings(h, b);
       if (tab === 'mods') return tabMods(h, b);
+      if (tab === 'invite') return tabInvite(h, b);
       return tabNet(h, b);
     }
     function tabConsole(h, b) {
@@ -152,7 +153,9 @@
       $$('[data-q]', b).forEach(function (x) { x.addEventListener('click', function () { send(x.dataset.q); }); });
       $('[data-o]', b).addEventListener('click', function () { inv('host_open_folder', { id: h.id }).catch(actErr); });
     }
+    function noisy(t) { return /^(Unpacking |Downloading library )/.test(t); }
     function addLine(con, text) {
+      if (noisy(text)) return;
       var near = con.scrollTop + con.clientHeight >= con.scrollHeight - 40;
       con.appendChild(document.createTextNode(text + '\n'));
       while (con.childNodes.length > 2000) con.removeChild(con.firstChild);
@@ -185,42 +188,80 @@
       }).catch(function (e) { b.innerHTML = '<div class="card hint">Ayar dosyası henüz yok. Server\'ı bir kez başlat.</div>'; });
     }
 
+    function copyText(t) { (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { toast('Kopyalandı'); }).catch(function () { toast('Kopyalanamadı, elle seç'); }); }
+    var MODCATS = [['', 'Tümü'], ['optimization', 'Performans'], ['technology', 'Teknoloji'], ['adventure', 'Macera'], ['utility', 'Araçlar'], ['management', 'Yönetim'], ['library', 'Kütüphane']];
+    var modCat = '';
     function tabMods(h, b) {
       if (h.kind === 'vanilla') { b.innerHTML = '<div class="card hint">Vanilla server mod ya da eklenti desteklemez. Mod/eklenti için Paper, Fabric, Forge veya NeoForge türünde yeni bir server kur.</div>'; return; }
-      var plug = h.kind === 'paper';
-      b.innerHTML = '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">' + (plug ? 'Eklenti' : 'Mod') + ' ekle (Modrinth)</h2>' +
-        '<div class="joinbar"><input id="hmQ" class="in" style="flex:1" placeholder="Ara (örn. luckperms, lithium)" autocomplete="off"><button class="btn primary" id="hmGo">Ara</button></div><div class="err" id="hmErr"></div><div id="hmOut" style="display:flex;flex-direction:column;gap:8px"></div>' +
-        '<p class="hint">Yalnızca bu server\'ın sürümüne ve yükleyicisine uyan dosyalar indirilir, SHA-512 ile doğrulanır. Yalnızca istemcide çalışan modlar server\'ı bozabilir; "server: unsupported" yazanları ekleme.</p></div>' +
-        (plug ? '' : '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Oyuncular için otomatik mod eşitleme</h2><p class="hint">Server\'ın mod klasöründen bir paket kodu üretilir. Oyuncular bu kodu <b>Server\'a Katıl</b> sayfasına yapıştırınca aynı modlar otomatik inip kurulur. Kodun çalışması için server\'ın dış adresi (Bağlantı sekmesi) bilinmeli.</p>' +
-          '<div><button class="btn primary" id="hpc">' + kz.ic('link', 16) + 'Paket kodu üret</button> <button class="btn" data-o="mods">' + kz.ic('folder', 16) + 'Server klasörünü aç</button></div><div class="err" id="hpcErr"></div><div id="hpcOut"></div></div>');
+      var plug = h.kind === 'paper', noun = plug ? 'Eklenti' : 'Mod';
+      b.innerHTML = '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">' + noun + ' gezgini (Modrinth)</h2>' +
+        '<div class="joinbar"><input id="hmQ" class="in" style="flex:1" placeholder="Ara..." autocomplete="off" aria-label="Ara"><button class="btn primary" id="hmGo">Ara</button></div>' +
+        '<div class="chips" role="group" aria-label="Kategori">' + MODCATS.map(function (x) { return '<button class="chip" aria-pressed="' + (x[0] === modCat) + '" data-hc="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>' +
+        '<div class="err" id="hmErr"></div><p class="hint">Yalnızca bu server\'ın sürümüne (' + esc(h.game) + ') ve yükleyicisine uyan, server\'da çalışan ' + noun.toLowerCase() + 'ler gösterilir. Gerekli bağımlılıklar da eklenir, dosyalar SHA-512 ile doğrulanır.</p></div>' +
+        '<div class="card" style="display:flex;flex-direction:column;gap:8px"><h2 style="margin:0">Kurulu ' + noun.toLowerCase() + 'ler</h2><div id="hmInst"></div></div>' +
+        '<div class="mods" id="hmOut"></div>';
+      var added = {};
+      var loadInst = function () {
+        inv('host_content', { id: h.id }).then(function (l) {
+          $('#hmInst').innerHTML = l.length ? l.map(function (f) { return '<div class="srow"><div><b class="mono">' + esc(f) + '</b></div><button class="btn sm danger" data-hrm="' + esc(f) + '">Kaldır</button></div>'; }).join('') : '<span class="hint">Henüz yok.</span>';
+          $$('[data-hrm]', b).forEach(function (x) { x.addEventListener('click', function () { inv('host_remove_content', { id: h.id, file: x.dataset.hrm }).then(loadInst).catch(actErr); }); });
+        }).catch(function (e) { $('#hmInst').textContent = errText(e); });
+      };
       var run = function () {
-        $('#hmErr').textContent = ''; $('#hmOut').innerHTML = '<span class="hint">Aranıyor...</span>';
-        inv('host_search', { id: h.id, query: $('#hmQ').value.trim() }).then(function (l) {
-          $('#hmOut').innerHTML = l.length ? l.slice(0, 12).map(function (x) {
-            return '<div class="srow"><div><b>' + esc(x.title) + '</b><small>' + esc(x.description) + '</small><small class="mono">server: ' + esc(x.server_side) + ' · istemci: ' + esc(x.client_side) + '</small></div><button class="btn sm primary" data-hadd="' + esc(x.project_id) + '">Ekle</button></div>';
-          }).join('') : '<span class="hint">Sonuç yok.</span>';
+        $('#hmErr').textContent = ''; $('#hmOut').innerHTML = '<div class="card hint">Aranıyor...</div>';
+        inv('host_search', { id: h.id, query: $('#hmQ').value.trim(), category: modCat || null }).then(function (l) {
+          l = l.filter(function (x) { return x.server_side !== 'unsupported'; });
+          $('#hmOut').innerHTML = l.length ? l.map(function (x) {
+            var icon = x.icon_url ? '<img class="ic" src="' + esc(x.icon_url) + '" alt="" width="48" height="48">' : '<div class="ic" style="background:var(--panel-2);display:grid;place-items:center;font-weight:800">' + esc((x.title || '?').charAt(0).toUpperCase()) + '</div>';
+            var done = added[x.project_id];
+            return '<article class="card mod">' + icon + '<div class="tx"><h3>' + esc(x.title) + '</h3><p>' + esc(x.description) + '</p><div class="acts">' + (x.client_side === 'required' ? '<span class="pill warn">Oyuncular da kurmalı</span>' : '<span class="pill mute">Yalnızca server</span>') + (x.categories || []).slice(0, 3).map(function (c) { return '<span class="pill mute">' + esc(c) + '</span>'; }).join('') + '</div></div>' +
+              '<button class="btn sm' + (done ? '' : ' primary') + '" style="align-self:flex-start" data-hadd="' + esc(x.project_id) + '"' + (done ? ' disabled' : '') + '>' + (done ? 'Eklendi' : 'Ekle') + '</button></article>';
+          }).join('') : '<div class="card hint">Eşleşen sonuç yok. Aramayı kısaltmayı ya da kategoriyi "Tümü" yapmayı dene.</div>';
           $$('[data-hadd]', b).forEach(function (x) {
             x.addEventListener('click', function () {
               x.disabled = true; x.textContent = 'Ekleniyor...';
-              inv('host_install', { id: h.id, project: x.dataset.hadd }).then(function (n) { x.textContent = 'Eklendi'; toast(n.length ? n.join(', ') + ' eklendi' : 'Zaten ekli'); }).catch(function (e) { x.disabled = false; x.textContent = 'Ekle'; $('#hmErr').textContent = errText(e); });
+              inv('host_install', { id: h.id, project: x.dataset.hadd }).then(function (n) { added[x.dataset.hadd] = true; x.textContent = 'Eklendi'; x.classList.remove('primary'); toast(n.length ? n.join(', ') + ' eklendi' : 'Zaten ekli'); loadInst(); }).catch(function (e) { x.disabled = false; x.textContent = 'Ekle'; $('#hmErr').textContent = errText(e); });
             });
           });
         }).catch(function (e) { $('#hmOut').innerHTML = ''; $('#hmErr').textContent = errText(e); });
       };
       $('#hmGo').addEventListener('click', run);
       $('#hmQ').addEventListener('keydown', function (e) { if (e.key === 'Enter') run(); });
-      var pc = $('#hpc');
-      if (pc) {
-        $('[data-o]', b).addEventListener('click', function () { inv('host_open_folder', { id: h.id }).catch(actErr); });
-        pc.addEventListener('click', function () {
-          pc.disabled = true; $('#hpcErr').textContent = ''; $('#hpcOut').innerHTML = '';
-          inv('host_pack_code', { id: h.id }).then(function (r) {
-            pc.disabled = false;
-            $('#hpcOut').innerHTML = '<div class="mono" style="word-break:break-all;padding:10px;border:1px solid var(--line);border-radius:var(--radius-sm)">' + esc(r.code) + '</div><p class="hint">' + r.included + ' mod pakete girdi' + (r.missing.length ? '; Modrinth\'te bulunamayan: ' + esc(r.missing.join(', ')) : '') + '.</p><button class="btn sm" id="hpcCopy">' + kz.ic('copy', 14) + 'Kopyala</button>';
-            $('#hpcCopy').addEventListener('click', function () { (navigator.clipboard ? navigator.clipboard.writeText(r.code) : Promise.reject()).then(function () { toast('Kopyalandı'); }).catch(function () { toast('Kopyalanamadı, elle seç'); }); });
-          }).catch(function (e) { pc.disabled = false; $('#hpcErr').textContent = errText(e); });
-        });
-      }
+      $$('[data-hc]', b).forEach(function (x) { x.addEventListener('click', function () { modCat = x.dataset.hc; $$('[data-hc]', b).forEach(function (y) { y.setAttribute('aria-pressed', y === x); }); run(); }); });
+      loadInst(); run();
+    }
+
+    function tabInvite(h, b) {
+      b.innerHTML = '<div class="card hint">Adresler yükleniyor...</div>';
+      inv('host_connect_info', { id: h.id }).then(function (ci) {
+        var rows = [];
+        if (ci.public) rows.push(['Dış adres (internetten bağlananlar)', ci.public]);
+        if (ci.lan) rows.push(['Yerel ağ adresi (aynı Wi-Fi/ağdaki arkadaşlar)', ci.lan]);
+        var modded = ['fabric', 'forge', 'neoforge'].indexOf(h.kind) >= 0;
+        b.innerHTML = '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Bağlantı adresi</h2>' +
+          (rows.length ? rows.map(function (r, i) { return '<div class="srow"><div><b>' + esc(r[0]) + '</b><small class="mono">' + esc(r[1]) + '</small></div><button class="btn sm" data-cp="' + i + '">' + kz.ic('copy', 14) + 'Kopyala</button></div>'; }).join('') : '<p class="hint">Henüz adres yok.</p>') +
+          (ci.public ? '' : '<div class="callout">' + kz.ic('shield', 20) + '<div>İnternetten bağlanılacak adres henüz bilinmiyor. Server başlayınca port otomatik açılırsa burada görünür; olmazsa <b>Bağlantı</b> sekmesinden tüneli kullan ya da router\'da portu elle aç, sonra aşağıdan dış IP\'ni bul.</div></div><div><button class="btn" id="hFind">' + kz.ic('globe', 16) + 'Dış IP\'mi bul</button> <span class="hint">(api.ipify.org\'a tek bir istek gönderir)</span></div>') +
+          '<div class="err" id="hiErr"></div></div>' +
+          '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Davet</h2>' +
+          (modded ? '<p class="hint">Mod eşitlemeli davet kodu: oyuncular kodu <b>Server\'a Katıl</b> sayfasına yapıştırınca server\'daki modlar otomatik iner ve doğru sürümle bağlanılır.</p>' +
+            '<div class="joinbar"><select id="hiAddr" class="in" style="flex:1;min-width:240px">' + rows.map(function (r) { return '<option value="' + esc(r[1]) + '">' + esc(r[0].split(' (')[0]) + ': ' + esc(r[1]) + '</option>'; }).join('') + '<option value="">Başka adres yaz...</option></select><input id="hiOwn" class="in mono" placeholder="host:port" style="flex:1;min-width:200px" hidden></div>' +
+            '<div><button class="btn primary" id="hiGo">' + kz.ic('link', 16) + 'Davet kodu üret</button></div><div class="err" id="hpcErr"></div><div id="hpcOut"></div>'
+            : '<p class="hint">Bu server türünde oyuncuya mod kurulmaz; arkadaşların <b>Server\'a Katıl → Sunucu adresi</b> sekmesine yukarıdaki adresi yazması yeterli. Sürümü ' + esc(h.game) + '.</p>') + '</div>';
+        $$('[data-cp]', b).forEach(function (x) { x.addEventListener('click', function () { copyText(rows[+x.dataset.cp][1]); }); });
+        var f = $('#hFind'); if (f) f.addEventListener('click', function () { f.disabled = true; inv('host_find_public', { id: h.id }).then(function (s) { h.public_address = s.public_address; tabInvite(h, b); }).catch(function (e) { f.disabled = false; $('#hiErr').textContent = errText(e); }); });
+        var sel2 = $('#hiAddr');
+        if (sel2) {
+          var own = $('#hiOwn'), tog = function () { own.hidden = sel2.value !== ''; }; sel2.addEventListener('change', tog); tog();
+          $('#hiGo').addEventListener('click', function () {
+            var go = $('#hiGo'); go.disabled = true; $('#hpcErr').textContent = ''; $('#hpcOut').innerHTML = '';
+            inv('host_pack_code', { id: h.id, address: sel2.value || own.value.trim() }).then(function (r) {
+              go.disabled = false;
+              $('#hpcOut').innerHTML = '<div class="mono" style="word-break:break-all;padding:10px;border:1px solid var(--line);border-radius:var(--radius-sm)">' + esc(r.code) + '</div><p class="hint">' + r.included + ' mod pakete girdi' + (r.missing.length ? '; Modrinth\'te bulunamayan (oyuncular elle eklemeli): ' + esc(r.missing.join(', ')) : '') + '.</p><button class="btn sm" id="hpcCopy">' + kz.ic('copy', 14) + 'Kodu kopyala</button>';
+              $('#hpcCopy').addEventListener('click', function () { copyText(r.code); });
+            }).catch(function (e) { go.disabled = false; $('#hpcErr').textContent = errText(e); });
+          });
+        }
+      }).catch(function (e) { b.innerHTML = '<div class="card"><div class="err">' + esc(errText(e)) + '</div></div>'; });
     }
 
     function tabNet(h, b) {
@@ -250,6 +291,7 @@
     /* ---------- olaylar ---------- */
     document.addEventListener('click', function (e) {
       var hm = e.target.closest('[data-hm]'); if (hm) { sel = hm.dataset.hm; tab = 'console'; draw(); return; }
+      var tg = e.target.closest('[data-ht-go]'); if (tg && sel) { tab = tg.dataset.htGo; draw(); return; }
       var t = e.target.closest('[data-ht]'); if (t && view.contains(t)) { tab = t.dataset.ht; var h = hostById(sel); if (h) { $$('[data-ht]').forEach(function (x) { x.setAttribute('aria-selected', x === t); }); drawTab(h); } return; }
       var a = e.target.closest('[data-ha]'); if (a && sel) {
         var act = { start: 'host_start', stop: 'host_stop', restart: 'host_restart' }[a.dataset.ha];

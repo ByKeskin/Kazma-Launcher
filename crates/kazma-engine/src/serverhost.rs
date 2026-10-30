@@ -470,10 +470,45 @@ fn modrinth_loader(spec: &ServerSpec) -> &str {
     spec.kind.as_str()
 }
 
-pub fn search_content(root: &Path, id: &str, query: &str) -> R<Vec<crate::modrinth::Hit>> {
+pub fn search_content(root: &Path, id: &str, query: &str, category: Option<&str>) -> R<Vec<crate::modrinth::Hit>> {
     let spec = read_spec(root, id)?;
     content_dir(root, &spec)?;
-    crate::modrinth::search_live(query, &spec.game, Some(modrinth_loader(&spec)), None, crate::modrinth::Kind::Mod)
+    crate::modrinth::search_live(query, &spec.game, Some(modrinth_loader(&spec)), category, crate::modrinth::Kind::Mod)
+}
+
+/// Server'da kurulu mod/eklenti dosyaları.
+pub fn list_content(root: &Path, id: &str) -> R<Vec<String>> {
+    let spec = read_spec(root, id)?;
+    let dir = content_dir(root, &spec)?;
+    let mut v: Vec<String> = fs::read_dir(dir).map_err(|e| e.to_string())?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.to_ascii_lowercase().ends_with(".jar")).collect();
+    v.sort();
+    Ok(v)
+}
+
+pub fn remove_content(root: &Path, id: &str, file: &str) -> R<()> {
+    let spec = read_spec(root, id)?;
+    let dir = content_dir(root, &spec)?;
+    if file.is_empty() || file.contains(['/', '\\', ':']) || file == ".." || !file.to_ascii_lowercase().ends_with(".jar") {
+        return Err("Geçersiz dosya adı.".into());
+    }
+    fs::remove_file(dir.join(file)).map_err(|e| format!("Silinemedi: {e}"))
+}
+
+/// Bu bilgisayarın yerel ağ adresi (paket göndermeden, yönlendirme tablosundan).
+pub fn lan_ip() -> Option<String> {
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    s.connect("192.0.2.1:9").ok()?;
+    match s.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(a) if a.is_private() => Some(a.to_string()),
+        _ => None,
+    }
+}
+
+/// Dış IP'yi öğrenir (yalnızca kullanıcı isteyince; api.ipify.org'a tek bir istek).
+pub fn public_ip() -> R<String> {
+    let t = get_text("https://api.ipify.org", 64)?;
+    let t = t.trim();
+    t.parse::<std::net::Ipv4Addr>().map(|a| a.to_string()).map_err(|_| "Dış IP öğrenilemedi.".to_string())
 }
 
 pub fn install_content(root: &Path, id: &str, project: &str, rep: &dyn Reporter) -> R<Vec<String>> {
@@ -483,9 +518,9 @@ pub fn install_content(root: &Path, id: &str, project: &str, rep: &dyn Reporter)
 }
 
 /// Oyuncuların modları otomatik eşitlemesi için paket kodu (server'ın mod klasöründen).
-pub fn pack_code(root: &Path, id: &str, rep: &dyn Reporter) -> R<crate::serverkit::PackBuild> {
+pub fn pack_code(root: &Path, id: &str, address: Option<String>, rep: &dyn Reporter) -> R<crate::serverkit::PackBuild> {
     let spec = read_spec(root, id)?;
-    let addr = spec.public_address.clone().ok_or("Önce server'ın dış adresini belirle (otomatik port açma ya da tünel adresi).")?;
+    let addr = address.filter(|a| !a.trim().is_empty()).or_else(|| spec.public_address.clone()).ok_or("Önce bir adres seç ya da gir (dış adres, tünel adresi ya da yerel ağ adresi).")?;
     if !["fabric", "forge", "neoforge"].contains(&spec.kind.as_str()) {
         return Err("Paket kodu yalnızca Fabric, Forge ve NeoForge server'lar için (Paper eklentileri oyuncuya kurulmaz).".into());
     }
@@ -813,6 +848,23 @@ mod tests {
     fn ansi_is_stripped() {
         assert_eq!(strip_ansi("\u{1b}[31mHata\u{1b}[0m: x\r"), "Hata: x");
         assert_eq!(strip_ansi("düz"), "düz");
+    }
+
+    #[test]
+    fn content_files_listed_and_removed_safely() {
+        let r = tmp("cont");
+        write_spec(&r, &spec("fabric")).unwrap();
+        let d = content_dir(&r, &spec("fabric")).unwrap();
+        fs::write(d.join("a.jar"), b"x").unwrap();
+        fs::write(d.join("b.txt"), b"x").unwrap();
+        assert_eq!(list_content(&r, "s1").unwrap(), ["a.jar"]);
+        for bad in ["../a.jar", "a/b.jar", "b.txt", "", ".."] {
+            assert!(remove_content(&r, "s1", bad).is_err(), "{bad}");
+        }
+        remove_content(&r, "s1", "a.jar").unwrap();
+        assert!(list_content(&r, "s1").unwrap().is_empty());
+        assert!(content_dir(&r, &spec("vanilla")).is_err());
+        let _ = fs::remove_dir_all(&r);
     }
 
     #[test]
