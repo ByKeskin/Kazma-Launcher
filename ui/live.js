@@ -208,7 +208,7 @@
       return '<article class="card inst"><div class="thumb"><canvas data-cid="' + esc(i.id) + '" aria-hidden="true"></canvas><button class="del" data-del="' + esc(i.id) + '" aria-label="' + esc(i.name) + ' instance\'ını sil" title="Sil">' + trashIcon() + '</button></div><div class="body"><h3>' + esc(i.name) + '</h3>' +
         '<div class="meta"><span class="pill mute">' + esc(loaderLabel(i)) + '</span><span class="pill mute">' + esc(i.game) + '</span><span class="pill mute">' + i.mods + ' mod</span>' +
         (i.kind === 'server' ? '<span class="pill acc">Server</span>' : '') + '</div>' +
-        '<div class="foot"><span>' + esc(ago(i.last_played)) + '</span>' + playButton(i, 'sm') + '</div></div></article>';
+        '<div class="foot"><span>' + esc(ago(i.last_played)) + '</span><span class="acts2"><button class="btn sm icon" data-open="' + esc(i.id) + '" title="Dosya konumunu aç" aria-label="' + esc(i.name) + ' klasörünü aç">' + kz.ic('folder', 16) + '</button>' + playButton(i, 'sm') + '</span></div></div></article>';
     }).join('');
     $('#v-library').innerHTML =
       '<div class="ph"><div><h1>Kütüphane</h1><p>Her instance kendi Minecraft sürümüne, yükleyicisine ve modlarına sahip. Hepsi birbirinden bağımsız. Server\'lara katılınca o server için ayrı bir instance oluşur.</p></div>' +
@@ -242,6 +242,7 @@
     '<span class="hint">Kazma server\'a sorup sürümünü ve mod yükleyicisini tahmin eder. Server kapalıysa sürümü elle seçebilirsin.</span></div><div class="err" id="addrErr" aria-live="polite"></div></div><div id="addrOut" style="display:flex;flex-direction:column;gap:16px"></div></div>' +
     '<div id="jm-own" style="display:none;flex-direction:column;gap:16px"><div class="card" style="display:flex;flex-direction:column;gap:14px"><h2 style="margin:0">Paket kodu üret</h2>' +
     '<p class="hint">Server\'ın <b>mods</b> klasörünü seç; Kazma modları Modrinth\'te bulup tek bir kısa kod üretir. Kodu oyunculara gönder, katılırken modlar otomatik eşitlenir. Aternos\'ta mods klasörünü panelden indirip buraya koyabilirsin. Modrinth\'te olmayan modlar koda girmez, oyuncuların elle eklemesi gerekir.</p>' +
+    '<div class="field"><label for="ownInst">Hazır instance\'tan al</label><select id="ownInst" class="in"><option value="">Klasör yolunu elle yazacağım</option></select><span class="hint">Server\'ın modlarını kendi instance\'ına elle koyduysan onu seç: mods klasörü, sürüm, yükleyici ve adres otomatik dolar.</span></div>' +
     '<div class="field"><label for="ownPath">Mods klasörünün yolu</label><input id="ownPath" class="in" placeholder="C:\\Users\\...\\mods" autocomplete="off"><span class="hint">Dosya Gezgini\'nde klasörü açıp adres çubuğundaki yolu kopyalayıp yapıştır.</span></div>' +
     '<div class="joinbar"><div class="field" style="flex:1;min-width:200px"><label for="ownName">Server adı</label><input id="ownName" class="in" maxlength="60" autocomplete="off"></div>' +
     '<div class="field" style="flex:1;min-width:200px"><label for="ownAddr">Server adresi</label><input id="ownAddr" class="in" placeholder="ornek.aternos.me:12345" autocomplete="off"></div></div>' +
@@ -296,10 +297,23 @@
     if (allVersions) return fill(allVersions);
     inv('get_versions', { snapshots: false }).then(function (l) { allVersions = l; fill(l); }).catch(function (e) { sel.innerHTML = '<option value="">Alınamadı</option>'; $('#ownErr').textContent = errText(e); });
   }
-  function ownInit() { if ($('#ownGame').options.length <= 1) loadVersionsInto($('#ownGame')); }
+  function ownInit() {
+    if ($('#ownGame').options.length <= 1) loadVersionsInto($('#ownGame'));
+    var opts = instances.filter(function (i) { return i.loader !== 'vanilla' && i.mods > 0 && !i.managed; });
+    $('#ownInst').innerHTML = '<option value="">Klasör yolunu elle yazacağım</option>' + opts.map(function (i) { return '<option value="' + esc(i.id) + '">' + esc(i.name) + ' (' + esc(i.game) + ' · ' + esc(loaderName(i.loader)) + ', ' + i.mods + ' mod)</option>'; }).join('');
+  }
+  function setSel(sel, val) { if (!$$('option', sel).some(function (o) { return o.value === val || o.textContent === val; })) sel.insertAdjacentHTML('afterbegin', '<option>' + esc(val) + '</option>'); sel.value = val; }
+  $('#ownInst').addEventListener('change', function () {
+    var i = instances.filter(function (x) { return x.id === this.value; }, this)[0];
+    $('#ownPath').disabled = !!i;
+    if (!i) return;
+    setSel($('#ownGame'), i.game); $('#ownLoader').value = i.loader; $('#ownVer').value = i.loader_version;
+    $('#ownName').value = i.kind === 'server' ? (i.server_host || i.name) : i.name;
+    if (i.server_host) $('#ownAddr').value = i.server_host + (i.server_port && i.server_port !== 25565 ? ':' + i.server_port : '');
+  });
   $('#ownGo').addEventListener('click', function () {
     var b = $('#ownGo'); b.disabled = true; $('#ownErr').textContent = ''; $('#ownOut').innerHTML = ''; b.lastChild.textContent = 'Üretiliyor...';
-    inv('make_pack', { path: $('#ownPath').value.trim(), name: $('#ownName').value.trim(), address: $('#ownAddr').value.trim(), game: $('#ownGame').value, loader: $('#ownLoader').value, version: $('#ownVer').value.trim() || null })
+    inv('make_pack', { instance: $('#ownInst').value || null, path: $('#ownPath').value.trim(), name: $('#ownName').value.trim(), address: $('#ownAddr').value.trim(), game: $('#ownGame').value, loader: $('#ownLoader').value, version: $('#ownVer').value.trim() || null })
       .then(function (r) {
         $('#ownOut').innerHTML = '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Paket kodun hazır</h2>' +
           '<p>' + r.included + ' mod koda girdi.</p><textarea id="ownCode" class="in mono" rows="4" readonly></textarea>' +
@@ -356,53 +370,143 @@
     });
   }
 
-  /* ---------- mod gezgini ---------- */
-  var CATS = [['', 'Tümü'], ['optimization', 'Performans'], ['technology', 'Teknoloji'], ['adventure', 'Macera'], ['decoration', 'Dekorasyon'], ['utility', 'Araçlar'], ['library', 'Kütüphane'], ['worldgen', 'Dünya üretimi']];
-  var cat = '', modTarget = '', added = {}, modsLoaded = false;
-  function modInstances() { return instances.filter(function (i) { return i.loader !== 'vanilla' && !i.managed; }); }
-  function renderModsShell() {
-    var fi = modInstances();
-    if (!fi.some(function (i) { return i.id === modTarget; })) modTarget = fi.length ? fi[0].id : '';
+  /* ---------- içerik gezgini: mod, kaynak paketi, shader ---------- */
+  var BR = {
+    mod: { view: '#v-mods', hash: 'mods', title: 'Mod gezgini', verb: 'mod', cats: [['', 'Tümü'], ['optimization', 'Performans'], ['technology', 'Teknoloji'], ['adventure', 'Macera'], ['decoration', 'Dekorasyon'], ['utility', 'Araçlar'], ['library', 'Kütüphane'], ['worldgen', 'Dünya üretimi']],
+      desc: 'Modrinth kataloğunda ara. Seçtiğin instance\'ın Minecraft sürümüne ve yükleyicisine (Fabric, Quilt, Forge, NeoForge) uyan en yeni dosya ve gerekli bağımlılıkları eklenir.',
+      filter: function (i) { return i.loader !== 'vanilla' && !i.managed; },
+      empty: 'Önce modlu bir instance gerek|Modlar bir yükleyiciyle çalışır: Fabric, Quilt, Forge ya da NeoForge. Yeni instance oluştururken bir yükleyici seç.' },
+    resourcepack: { view: '#v-resources', hash: 'resources', title: 'Kaynak paketleri', verb: 'paket', cats: [['', 'Tümü'], ['vanilla-like', 'Vanilla benzeri'], ['realistic', 'Gerçekçi'], ['simplistic', 'Basit'], ['decoration', 'Dekorasyon'], ['combat', 'Savaş'], ['16x', '16x'], ['32x', '32x'], ['64x', '64x']],
+      desc: 'Doku, ses ve model paketleri Modrinth\'ten. Seçtiğin instance\'ın Minecraft sürümüne uyan en yeni dosya resourcepacks klasörüne iner. Oyunda Seçenekler → Kaynak Paketleri\'nden etkinleştir.',
+      filter: function () { return true; }, empty: 'Önce bir instance gerek|Kaynak paketini koyacağımız bir instance oluştur.' },
+    shader: { view: '#v-shaders', hash: 'shaders', title: 'Shader paketleri', verb: 'shader', cats: [['', 'Tümü'], ['realistic', 'Gerçekçi'], ['semi-realistic', 'Yarı gerçekçi'], ['cartoon', 'Çizgi film'], ['fantasy', 'Fantastik'], ['vanilla-like', 'Vanilla benzeri'], ['potato', 'Düşük donanım']],
+      desc: 'Işık ve gölge paketleri. Dosya instance\'ın shaderpacks klasörüne iner. Shader\'lar Iris (Fabric/Quilt/NeoForge), Oculus (Forge) ya da OptiFine gerektirir; oyunda Seçenekler → Video → Shader Paketleri\'nden seç.',
+      filter: function () { return true; }, empty: 'Önce bir instance gerek|Shader paketini koyacağımız bir instance oluştur.' }
+  };
+  var bst = { mod: { cat: '', target: '', loaded: false, added: {} }, resourcepack: { cat: '', target: '', loaded: false, added: {} }, shader: { cat: '', target: '', loaded: false, added: {} } };
+  function brInstances(kind) { return instances.filter(BR[kind].filter); }
+  function irisHint(kind, inst) {
+    if (kind !== 'shader' || !inst) return '';
+    if (inst.loader === 'vanilla') return '<div class="callout">' + kz.ic('shield', 20) + '<div>Bu instance modsuz (Vanilla): shader için Iris ya da OptiFine gerekir. Fabric\'li bir instance oluşturup Iris\'i kurabilirsin.</div></div>';
+    if (inst.loader === 'forge') return '<div class="callout">' + kz.ic('shield', 20) + '<div>Forge\'ta shader için <b>Oculus</b> modu gerekir. Mod gezgininden "oculus" ara ve ekle.</div></div>';
+    if (inst.managed) return '';
+    return '<div class="callout">' + kz.ic('shield', 20) + '<div>Shader\'ların çalışması için <b>Iris</b> modu gerekir. <button class="btn sm" data-iris="1">' + kz.ic('download', 14) + 'Iris\'i bu instance\'a kur</button></div></div>';
+  }
+  function renderBrowse(kind) {
+    var c = BR[kind], st = bst[kind], fi = brInstances(kind), v = $(c.view);
+    if (!fi.some(function (i) { return i.id === st.target; })) st.target = fi.length ? fi[0].id : '';
     if (!fi.length) {
-      $('#v-mods').innerHTML = '<div class="ph"><div><h1>Mod gezgini</h1></div></div><div class="card view-note"><h2>Önce modlu bir instance gerek</h2><p style="margin:8px 0 14px;color:var(--ink-2)">Modlar bir yükleyiciyle çalışır: Fabric, Quilt, Forge ya da NeoForge. Yeni instance oluştururken bir yükleyici seç.</p><button class="btn primary" data-newinst="1">' + kz.ic('plus', 18) + 'Instance oluştur</button></div>';
+      var e = c.empty.split('|');
+      v.innerHTML = '<div class="ph"><div><h1>' + c.title + '</h1></div></div><div class="card view-note"><h2>' + e[0] + '</h2><p style="margin:8px 0 14px;color:var(--ink-2)">' + e[1] + '</p><button class="btn primary" data-newinst="1">' + kz.ic('plus', 18) + 'Instance oluştur</button></div>';
       return;
     }
-    $('#v-mods').innerHTML =
-      '<div class="ph"><div><h1>Mod gezgini</h1><p>Modrinth kataloğunda ara. Seçtiğin instance\'ın Minecraft sürümüne ve yükleyicisine (Fabric, Quilt, Forge, NeoForge) uyan en yeni dosya ve gerekli bağımlılıkları eklenir.</p></div></div>' +
-      '<div class="card" style="display:flex;flex-direction:column;gap:14px"><div class="joinbar"><input id="modQ" class="in" style="font-family:var(--font-body)" placeholder="Mod ara, örn. sodium" aria-label="Mod ara"><button class="btn primary" id="modGo">' + kz.ic('refresh', 18) + 'Ara</button></div>' +
-      '<div class="chips" id="catChips" role="group" aria-label="Kategori">' + CATS.map(function (c) { return '<button class="chip" aria-pressed="' + (c[0] === cat) + '" data-c="' + c[0] + '">' + c[1] + '</button>'; }).join('') + '</div>' +
-      '<div class="field"><label for="modInst">Eklenecek instance</label><select id="modInst" class="in">' + fi.map(function (i) { return '<option value="' + esc(i.id) + '"' + (i.id === modTarget ? ' selected' : '') + '>' + esc(i.name) + ' (' + esc(i.game) + ' · ' + esc(loaderName(i.loader)) + ')</option>'; }).join('') + '</select></div>' +
-      '<div class="err" id="modErr" aria-live="polite"></div></div><div class="mods" id="modList"></div>';
-    $('#modGo').addEventListener('click', searchMods);
-    $('#modQ').addEventListener('keydown', function (e) { if (e.key === 'Enter') searchMods(); });
-    $('#modInst').addEventListener('change', function () { modTarget = this.value; searchMods(); });
-    $('#catChips').addEventListener('click', function (e) {
-      var b = e.target.closest('[data-c]'); if (!b) return; cat = b.dataset.c;
-      $$('#catChips .chip').forEach(function (x) { x.setAttribute('aria-pressed', x === b); }); searchMods();
-    });
-    searchMods();
+    var cur = fi.filter(function (i) { return i.id === st.target; })[0];
+    v.innerHTML = '<div class="ph"><div><h1>' + c.title + '</h1><p>' + esc(c.desc) + '</p></div></div>' +
+      '<div class="card" style="display:flex;flex-direction:column;gap:14px"><div class="joinbar"><input id="q-' + kind + '" class="in" style="font-family:var(--font-body)" placeholder="Ara..." aria-label="Ara"><button class="btn primary" data-bgo="' + kind + '">' + kz.ic('refresh', 18) + 'Ara</button></div>' +
+      '<div class="chips" role="group" aria-label="Kategori">' + c.cats.map(function (x) { return '<button class="chip" aria-pressed="' + (x[0] === st.cat) + '" data-bcat="' + kind + '" data-c="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>' +
+      '<div class="field"><label for="i-' + kind + '">Eklenecek instance</label><select id="i-' + kind + '" class="in" data-binst="' + kind + '">' + fi.map(function (i) { return '<option value="' + esc(i.id) + '"' + (i.id === st.target ? ' selected' : '') + '>' + esc(i.name) + ' (' + esc(i.game) + ' · ' + esc(loaderName(i.loader)) + ')</option>'; }).join('') + '</select></div>' +
+      irisHint(kind, cur) + '<div class="err" id="e-' + kind + '" aria-live="polite"></div></div><div class="mods" id="l-' + kind + '"></div>';
+    var q = $('#q-' + kind); q.addEventListener('keydown', function (e) { if (e.key === 'Enter') searchBrowse(kind); });
+    searchBrowse(kind);
   }
   function sideLabel(h) { return h.server_side === 'unsupported' ? 'Yalnızca istemci' : h.client_side === 'unsupported' ? 'Yalnızca server' : 'İstemci + server'; }
-  function searchMods() {
-    var list = $('#modList'); $('#modErr').textContent = ''; list.innerHTML = '<div class="card hint">Aranıyor...</div>';
-    inv('search_mods', { instance: modTarget, query: $('#modQ').value.trim(), category: cat || null }).then(function (hits) {
-      if (!hits.length) { list.innerHTML = '<div class="card hint">Eşleşen mod yok. Aramayı kısaltmayı ya da kategoriyi "Tümü" yapmayı dene.</div>'; return; }
+  function searchBrowse(kind) {
+    var st = bst[kind], list = $('#l-' + kind); $('#e-' + kind).textContent = ''; list.innerHTML = '<div class="card hint">Aranıyor...</div>';
+    inv('search_content', { instance: st.target, kind: kind, query: $('#q-' + kind).value.trim(), category: st.cat || null }).then(function (hits) {
+      if (!hits.length) { list.innerHTML = '<div class="card hint">Eşleşen sonuç yok. Aramayı kısaltmayı ya da kategoriyi "Tümü" yapmayı dene.</div>'; return; }
       list.innerHTML = hits.map(function (h) {
-        var key = modTarget + '|' + h.project_id, done = added[key];
+        var done = st.added[st.target + '|' + h.project_id];
         var icon = h.icon_url ? '<img class="ic" src="' + esc(h.icon_url) + '" alt="" width="48" height="48">' : '<div class="ic" style="background:var(--panel-2);display:grid;place-items:center;font-weight:800">' + esc((h.title || '?').charAt(0).toUpperCase()) + '</div>';
-        return '<article class="card mod">' + icon + '<div class="tx"><h3>' + esc(h.title) + '</h3><p>' + esc(h.description) + '</p><div class="acts"><span class="pill mute">' + esc(sideLabel(h)) + '</span>' +
-          h.categories.slice(0, 2).map(function (c) { return '<span class="pill mute">' + esc(c) + '</span>'; }).join('') + '</div></div>' +
-          '<button class="btn sm' + (done ? '' : ' primary') + '" style="align-self:flex-start" data-add="' + esc(h.project_id) + '"' + (done ? ' disabled' : '') + '>' + (done ? 'Eklendi' : 'Ekle') + '</button></article>';
+        return '<article class="card mod">' + icon + '<div class="tx"><h3>' + esc(h.title) + '</h3><p>' + esc(h.description) + '</p><div class="acts">' + (kind === 'mod' ? '<span class="pill mute">' + esc(sideLabel(h)) + '</span>' : '') +
+          h.categories.slice(0, 3).map(function (c) { return '<span class="pill mute">' + esc(c) + '</span>'; }).join('') + '</div></div>' +
+          '<button class="btn sm' + (done ? '' : ' primary') + '" style="align-self:flex-start" data-add="' + esc(h.project_id) + '" data-kind="' + kind + '"' + (done ? ' disabled' : '') + '>' + (done ? 'Eklendi' : 'Ekle') + '</button></article>';
       }).join('');
-    }).catch(function (e) { list.innerHTML = ''; $('#modErr').textContent = errText(e); });
+    }).catch(function (e) { list.innerHTML = ''; $('#e-' + kind).textContent = errText(e); });
   }
-  function addMod(btn) {
-    var id = btn.dataset.add; btn.disabled = true; btn.textContent = 'Ekleniyor...';
-    inv('install_mod', { instance: modTarget, project: id }).then(function (names) {
-      added[modTarget + '|' + id] = true; btn.textContent = 'Eklendi'; btn.classList.remove('primary');
-      toast(names.length ? names.length + ' dosya eklendi' : 'Zaten ekli'); return refresh(false);
-    }).catch(function (e) { btn.disabled = false; btn.textContent = 'Ekle'; $('#modErr').textContent = errText(e); });
+  function addContent(btn, kindOverride, projectOverride) {
+    var kind = kindOverride || btn.dataset.kind, st = bst[kind], id = projectOverride || btn.dataset.add, label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Ekleniyor...';
+    inv('install_content', { instance: st.target, kind: kind === 'mod' || projectOverride ? 'mod' : kind, project: id }).then(function (names) {
+      st.added[st.target + '|' + id] = true; btn.textContent = 'Eklendi'; btn.classList.remove('primary');
+      toast(names.length ? names.join(', ') + ' eklendi' : 'Zaten ekli'); return refresh(false);
+    }).catch(function (e) { btn.disabled = false; btn.textContent = label; var el = $('#e-' + kind); if (el) el.textContent = errText(e); else toast(errText(e)); });
   }
+  var HASHKIND = { mods: 'mod', resources: 'resourcepack', shaders: 'shader' };
+  addEventListener('hashchange', function () {
+    var k = HASHKIND[location.hash.slice(1)];
+    if (k && !bst[k].loaded) { bst[k].loaded = true; renderBrowse(k); }
+    if (location.hash === '#skins') renderSkins();
+  });
+
+  /* ---------- skinler ---------- */
+  var skinList = [];
+  var instSkinTarget = '';
+  function drawSkin(cv, dataUrl) {
+    var img = new Image();
+    img.onload = function () {
+      var x = cv.getContext('2d'); cv.width = 16; cv.height = 32; x.imageSmoothingEnabled = false; x.clearRect(0, 0, 16, 32);
+      var legacy = img.height === 32;
+      var part = function (sx, sy, w, h, dx, dy, flip) {
+        if (!flip) { x.drawImage(img, sx, sy, w, h, dx, dy, w, h); return; }
+        x.save(); x.translate(dx + w, dy); x.scale(-1, 1); x.drawImage(img, sx, sy, w, h, 0, 0, w, h); x.restore();
+      };
+      part(8, 8, 8, 8, 4, 0); part(20, 20, 8, 12, 4, 8); part(44, 20, 4, 12, 0, 8); part(4, 20, 4, 12, 4, 20);
+      if (legacy) { part(44, 20, 4, 12, 12, 8, true); part(4, 20, 4, 12, 8, 20, true); }
+      else { part(36, 52, 4, 12, 12, 8); part(20, 52, 4, 12, 8, 20); part(20, 36, 8, 12, 4, 8); part(44, 36, 4, 12, 0, 8); part(52, 52, 4, 12, 12, 8); part(4, 36, 4, 12, 4, 20); part(4, 52, 4, 12, 8, 20); }
+      part(40, 8, 8, 8, 4, 0);
+    };
+    img.src = dataUrl;
+  }
+  function renderSkins() {
+    inv('list_skins').then(function (l) { skinList = l; drawSkinsPage(); }).catch(function (e) { toast(errText(e)); });
+  }
+  function drawSkinsPage() {
+    var mi = instances.filter(function (i) { return i.loader !== 'vanilla' && !i.managed; });
+    if (!mi.some(function (i) { return i.id === instSkinTarget; })) instSkinTarget = mi.length ? mi[0].id : '';
+    var cards = skinList.map(function (s) {
+      var on = cfg.skin === s.id;
+      return '<article class="card skin' + (on ? ' on' : '') + '"><canvas data-sid="' + esc(s.id) + '" aria-label="' + esc(s.name) + ' önizleme"></canvas><div><b>' + esc(s.name) + '</b><div class="hint">' + esc(s.source) + '</div></div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center"><button class="btn sm' + (on ? '' : ' primary') + '" data-skin-use="' + esc(s.id) + '"' + (on ? ' disabled' : '') + '>' + (on ? 'Seçili' : 'Kullan') + '</button>' +
+        (on ? '<button class="btn sm" data-skin-use="">Seçimi kaldır</button>' : '') + '<button class="btn sm danger" data-skin-del="' + esc(s.id) + '">Sil</button></div></article>';
+    }).join('');
+    $('#v-skins').innerHTML =
+      '<div class="ph"><div><h1>Skinler</h1><p>Skin kitaplığın. Dosyadan ya da bir oyuncunun adıyla ekle, birini seç; oyun açılırken seçili skin instance\'a yazılır.</p></div></div>' +
+      '<div class="card" style="display:flex;flex-direction:column;gap:14px"><h2 style="margin:0">Skin ekle</h2><div class="joinbar">' +
+      '<div class="field" style="flex:1;min-width:220px"><label for="skinFile">PNG dosyasından (64x64 ya da 64x32)</label><input id="skinFile" class="in" type="file" accept="image/png"></div>' +
+      '<div class="field" style="flex:1;min-width:220px"><label for="skinUser">Oyuncu adıyla (Mojang\'dan indirir)</label><div class="joinbar"><input id="skinUser" class="in" maxlength="16" placeholder="örn. Notch" autocomplete="off"><button class="btn primary" id="skinFetch">' + kz.ic('download', 16) + 'İndir</button></div></div></div>' +
+      '<div class="err" id="skinErr" aria-live="polite"></div></div>' +
+      (skinList.length ? '<div class="skin-grid">' + cards + '</div>' : '<div class="card hint">Henüz skin yok. Yukarıdan bir dosya seç ya da bir oyuncu adıyla indir.</div>') +
+      '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Skin oyunda görünsün</h2>' +
+      '<div class="callout">' + kz.ic('shield', 20) + '<div>Çevrimdışı hesaplarda vanilla Minecraft skin göstermez. Seçtiğin skinin oyunda görünmesi için instance\'a <b>CustomSkinLoader</b> modu gerekir. Skin yalnızca kendi ekranında görünür, server\'daki diğer oyuncular görmez (onların da aynı modu kullanması gerekir). Microsoft girişi gelince gerçek skin yüklemesi eklenecek.</div></div>' +
+      (mi.length ? '<div class="joinbar"><select id="skinInst" class="in" style="flex:1;min-width:220px">' + mi.map(function (i) { return '<option value="' + esc(i.id) + '"' + (i.id === instSkinTarget ? ' selected' : '') + '>' + esc(i.name) + ' (' + esc(i.game) + ' · ' + esc(loaderName(i.loader)) + ')</option>'; }).join('') + '</select><button class="btn" id="skinCsl">' + kz.ic('download', 16) + 'CustomSkinLoader\'ı kur</button></div>' : '<p class="hint">Modlu (Fabric, Quilt, Forge, NeoForge) bir instance oluşturunca buradan modu kurabilirsin.</p>') + '</div>';
+    $$('#v-skins canvas[data-sid]').forEach(function (cv) { inv('skin_data', { id: cv.dataset.sid }).then(function (u) { drawSkin(cv, u); }); });
+    var file = $('#skinFile');
+    file.addEventListener('change', function () {
+      var f = file.files[0]; if (!f) return; $('#skinErr').textContent = '';
+      var rd = new FileReader();
+      rd.onload = function () {
+        inv('add_skin', { name: f.name.replace(/\.[^.]+$/, '').slice(0, 40) || 'Skin', data: String(rd.result) }).then(function () { toast('Skin eklendi'); renderSkins(); })
+          .catch(function (e) { $('#skinErr').textContent = errText(e); });
+      };
+      rd.readAsDataURL(f);
+    });
+    $('#skinFetch').addEventListener('click', function () {
+      var b = $('#skinFetch'); b.disabled = true; $('#skinErr').textContent = '';
+      inv('fetch_skin', { player: $('#skinUser').value.trim() }).then(function (s) { toast(s.name + ' skini eklendi'); renderSkins(); })
+        .catch(function (e) { $('#skinErr').textContent = errText(e); b.disabled = false; });
+    });
+    var csl = $('#skinCsl');
+    if (csl) {
+      $('#skinInst').addEventListener('change', function () { instSkinTarget = this.value; });
+      csl.addEventListener('click', function () { bst.mod.target = instSkinTarget; addContent(csl, 'mod', 'customskinloader'); });
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var u = e.target.closest('[data-skin-use]');
+    if (u) { inv('select_skin', { id: u.dataset.skinUse || null }).then(function (c) { cfg = c; toast(c.skin ? 'Skin seçildi' : 'Skin seçimi kaldırıldı'); drawSkinsPage(); }).catch(function (er) { toast(errText(er)); }); return; }
+    var d = e.target.closest('[data-skin-del]');
+    if (d) { inv('delete_skin', { id: d.dataset.skinDel }).then(function () { return refresh(false); }).then(renderSkins).catch(function (er) { toast(errText(er)); }); }
+  });
 
   /* ---------- ortak tıklamalar ---------- */
   $('#main').addEventListener('click', function (e) {
@@ -410,14 +514,24 @@
     var rs = e.target.closest('[data-resync]'); if (rs) { resync(rs.dataset.resync); return; }
     var p = e.target.closest('[data-play]'); if (p) { play(p.dataset.play); return; }
     if (e.target.closest('[data-newinst]')) { openNew(); return; }
-    var a = e.target.closest('[data-add]'); if (a) { addMod(a); }
+    var o = e.target.closest('[data-open]'); if (o) { inv('open_instance_folder', { id: o.dataset.open }).catch(function (er) { toast(errText(er)); }); return; }
+    var go = e.target.closest('[data-bgo]'); if (go) { searchBrowse(go.dataset.bgo); return; }
+    var bc = e.target.closest('[data-bcat]');
+    if (bc) { var k = bc.dataset.bcat; bst[k].cat = bc.dataset.c; $$('[data-bcat="' + k + '"]').forEach(function (x) { x.setAttribute('aria-pressed', x === bc); }); searchBrowse(k); return; }
+    var ir = e.target.closest('[data-iris]'); if (ir) { addContent(ir, 'shader', 'iris'); return; }
+    var a = e.target.closest('[data-add]'); if (a) { addContent(a); }
   });
-  addEventListener('hashchange', function () { if (location.hash === '#mods' && !modsLoaded) { modsLoaded = true; renderModsShell(); } });
+
+  document.addEventListener('change', function (e) {
+    var sel = e.target.closest('[data-binst]'); if (!sel) return;
+    var k = sel.dataset.binst; bst[k].target = sel.value; renderBrowse(k);
+  });
 
   function refresh(rerender) {
     return Promise.all([inv('get_config'), inv('get_instances')]).then(function (r) {
       cfg = r[0]; instances = r[1]; renderAccount(); renderHome(); renderLibrary();
-      if (rerender !== false && modsLoaded) renderModsShell();
+      if (rerender !== false) ['mod', 'resourcepack', 'shader'].forEach(function (k) { if (bst[k].loaded) renderBrowse(k); });
+      if (rerender !== false && location.hash === '#skins') drawSkinsPage();
     }).catch(function (e) { toast(errText(e)); });
   }
   refresh().then(function () { if (!cfg.player) openLogin(); });

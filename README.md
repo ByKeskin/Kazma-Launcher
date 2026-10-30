@@ -61,6 +61,17 @@ sürümünü ve Forge ipucunu bulur, o server için ayrı bir instance açar. Mo
 Çevrimdışı hesapla yalnızca "cracked" açık server'lara girilir (Aternos'ta server sahibi açar).
 Server sahibi isterse `kazma-cli make-manifest` ile mod listesini yayınlayıp **davet bağlantısıyla** otomatik eşitleme sağlar.
 
+## Kaynak paketleri, shader'lar, skinler
+
+- **Kaynak Paketleri / Shader'lar** menüleri Modrinth'te arar ve seçilen instance'ın `resourcepacks` / `shaderpacks`
+  klasörüne SHA-512 doğrulamasıyla indirir. Paketler yalnızca Minecraft sürümüne göre aranır (yükleyiciye göre değil).
+  Etkinleştirme oyunda yapılır. Shader'lar Iris (Fabric/Quilt/NeoForge), Oculus (Forge) ya da OptiFine ister;
+  Fabric/Quilt instance'larda tek tıkla Iris kurulur.
+- **Skinler:** PNG (64x64/64x32) dosyasından ya da Mojang'dan oyuncu adıyla skin kitaplığına eklenir; seçili skin oyun
+  açılırken `instances/<id>/CustomSkinLoader/LocalSkin/skins/<oyuncu>.png` olarak yazılır. Çevrimdışı hesapta skinin
+  görünmesi için CustomSkinLoader modu gerekir; menüden kurulabilir. Skin yalnızca kendi ekranında görünür.
+- Kütüphane kartındaki klasör simgesi instance klasörünü Dosya Gezgini'nde açar.
+
 ## Paket kodu (barındırma gerektirmeyen otomatik eşitleme)
 
 Aternos gibi mod listesi yayınlamayan server'lar için: server sahibi mods klasöründen **paket kodu** üretir

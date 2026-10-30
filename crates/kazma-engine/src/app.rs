@@ -4,7 +4,7 @@
 use crate::install::{self, GameExit};
 use crate::net::*;
 use crate::report::Reporter;
-use crate::{modrinth, serverkit, sync};
+use crate::{modrinth, serverkit, skins, sync};
 use kazma_core::instance::{self, InstanceSpec, LoaderSpec};
 use crate::ping;
 use kazma_core::invite::{self, Invite};
@@ -41,11 +41,14 @@ pub struct Config {
     pub ram: u32,
     #[serde(default)]
     pub last_instance: Option<String>,
+    /// Seçili skinin kimliği (skin kitaplığından).
+    #[serde(default)]
+    pub skin: Option<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { player: String::new(), ram: default_ram(), last_instance: None }
+        Config { player: String::new(), ram: default_ram(), last_instance: None, skin: None }
     }
 }
 
@@ -63,6 +66,71 @@ pub fn set_player(root: &Path, name: &str) -> R<Config> {
     c.player = name.to_string();
     save_config(root, &c)?;
     Ok(c)
+}
+
+/// Skin kitaplığından bir skini seç (None: seçimi kaldır).
+pub fn set_skin(root: &Path, id: Option<String>) -> R<Config> {
+    if let Some(i) = &id {
+        skins::skin_bytes(root, i)?;
+    }
+    let mut c = load_config(root);
+    c.skin = id;
+    save_config(root, &c)?;
+    Ok(c)
+}
+
+/// Başlatmadan önce seçili skini instance'a yazar. Hata oyunu engellemez.
+fn apply_active_skin(root: &Path, instance_id: &str, cfg: &Config) {
+    if let Some(id) = &cfg.skin {
+        let _ = skins::apply_to_instance(root, &root.join("instances").join(instance_id), &cfg.player, id);
+    }
+}
+
+pub fn open_in_file_manager(path: &Path) -> R<()> {
+    #[cfg(windows)]
+    let mut c = std::process::Command::new("explorer");
+    #[cfg(target_os = "macos")]
+    let mut c = std::process::Command::new("open");
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let mut c = std::process::Command::new("xdg-open");
+    c.arg(path).spawn().map(|_| ()).map_err(|e| format!("klasör açılamadı: {e}"))
+}
+
+/// Instance klasörünün yolu (yoksa oluşturulur). Dosya Gezgini'nde açmak için.
+pub fn instance_dir(root: &Path, id: &str) -> R<PathBuf> {
+    let info = read_info(root, id)?;
+    let d = root.join("instances").join(&info.id);
+    fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    Ok(d)
+}
+
+pub fn open_instance_folder(root: &Path, id: &str) -> R<()> {
+    open_in_file_manager(&instance_dir(root, id)?)
+}
+
+/// Mod, kaynak paketi ya da shader arama. Modlar yükleyiciye göre, paketler yalnızca sürüme göre aranır.
+pub fn search_content(root: &Path, instance: &str, kind: &str, query: &str, category: Option<&str>) -> R<Vec<modrinth::Hit>> {
+    let info = read_info(root, instance)?;
+    let k = modrinth::Kind::parse(kind)?;
+    if k == modrinth::Kind::Mod && info.loader == "vanilla" {
+        return Err("Mod aramak için Fabric, Quilt, Forge ya da NeoForge'lu bir instance seç.".into());
+    }
+    modrinth::search_live(query, &info.game, Some(&info.loader), category, k)
+}
+
+pub fn install_content(root: &Path, instance: &str, kind: &str, project: &str, rep: &dyn Reporter) -> R<Vec<String>> {
+    let info = read_info(root, instance)?;
+    let k = modrinth::Kind::parse(kind)?;
+    if k == modrinth::Kind::Mod {
+        if info.loader == "vanilla" {
+            return Err("Mod eklemek için Fabric, Quilt, Forge ya da NeoForge'lu bir instance seç.".into());
+        }
+        if info.managed {
+            return Err("Bu instance'ın modlarını server'ın manifesti ya da paket kodu yönetir; elle mod eklenmez.".into());
+        }
+    }
+    let dir = root.join("instances").join(&info.id).join(k.dir());
+    modrinth::install_live(&dir, project, &info.game, Some(&info.loader), k, rep)
 }
 
 // ---------- instance kaydı ----------
@@ -220,6 +288,7 @@ pub fn launch_instance(root: &Path, id: &str, java: &Option<PathBuf>, rep: &dyn 
     };
     let opts = LaunchOptions { max_mb: cfg.ram, join_server: join, ..Default::default() };
     mark_played(root, id);
+    apply_active_skin(root, id, &cfg);
     install::launch_game(root, &spec, &inst, &env, &acct, &opts, java, rep)
 }
 
@@ -487,6 +556,7 @@ pub fn join_run(root: &Path, p: &Prepared, trust_new: bool, java: &Option<PathBu
     }
     let opts = LaunchOptions { max_mb: cfg.ram, join_server: Some((p.invite.host.clone(), p.invite.port)), ..Default::default() };
     mark_played(root, &p.spec.id);
+    apply_active_skin(root, &p.spec.id, &cfg);
     install::launch_game(root, &p.spec, &inst, &env, &acct, &opts, java, rep)
 }
 
@@ -660,6 +730,48 @@ mod tests {
         let e = join_prepare(&r, "my_world.aternos.me:12345", &NullReporter).err().unwrap();
         assert!(e.contains("paket kodu") && e.contains("Sunucu adresi"));
         assert!(join_prepare(&r, "kazma://pack/!!!", &NullReporter).is_err());
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn active_skin_is_selected_and_written_per_instance() {
+        let r = tmp("skinsel");
+        assert!(set_skin(&r, Some("abcdef123456".into())).is_err(), "kitaplıkta olmayan skin seçilemez");
+        let png = {
+            let mut b = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+            b.extend(b"IHDR");
+            b.extend(64u32.to_be_bytes());
+            b.extend(64u32.to_be_bytes());
+            b.extend([8, 6, 0, 0, 0, 9, 9, 9]);
+            b
+        };
+        let s = skins::add_skin(&r, "A", "dosya", &png).unwrap();
+        let c = set_skin(&r, Some(s.id.clone())).unwrap();
+        assert_eq!(c.skin.as_deref(), Some(s.id.as_str()));
+        let mut cfg = load_config(&r);
+        cfg.player = "Mustafa".into();
+        apply_active_skin(&r, "1.20.1-vanilla", &cfg);
+        assert!(r.join("instances/1.20.1-vanilla/CustomSkinLoader/LocalSkin/skins/Mustafa.png").is_file());
+        assert_eq!(set_skin(&r, None).unwrap().skin, None);
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn content_rules_by_kind() {
+        let r = tmp("content");
+        create_instance(&r, "Vanilla", "1.20.1", "vanilla", None).unwrap();
+        let (_, _) = connect_server(&r, "x.aternos.me:1", "1.20.1", "forge", Some("47.3.0".into()), false, &None, &NullReporter).unwrap();
+        // vanilla instance'a mod eklenmez
+        assert!(install_content(&r, "1.20.1-vanilla", "mod", "p", &NullReporter).unwrap_err().contains("Mod eklemek"));
+        assert!(search_content(&r, "1.20.1-vanilla", "mod", "q", None).unwrap_err().contains("Mod aramak"));
+        assert!(search_content(&r, "1.20.1-vanilla", "bilinmeyen", "q", None).is_err());
+        // yönetilen (manifestli) instance'a elle mod eklenmez, ama kaynak paketi eklenebilir kuralı bozulmaz
+        let mut i = read_info(&r, "server-x.aternos.me-1").unwrap();
+        i.managed = true;
+        write_info(&r, &i).unwrap();
+        assert!(install_content(&r, "server-x.aternos.me-1", "mod", "p", &NullReporter).unwrap_err().contains("yönetir"));
+        assert!(instance_dir(&r, "../x").is_err());
+        assert!(instance_dir(&r, "1.20.1-vanilla").unwrap().is_dir());
         let _ = fs::remove_dir_all(&r);
     }
 

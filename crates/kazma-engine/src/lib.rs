@@ -7,4 +7,5 @@ pub mod net;
 pub mod ping;
 pub mod report;
 pub mod serverkit;
+pub mod skins;
 pub mod sync;

@@ -5,7 +5,7 @@
 //! Arayüze giden hatalar düz Türkçe metindir.
 
 use kazma_engine::report::Reporter;
-use kazma_engine::{app, install, modrinth};
+use kazma_engine::{app, install, modrinth, skins};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -81,12 +81,60 @@ fn delete_instance(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     app::delete_instance(&state.root, &id)
 }
 
-/// Server sahibi: mod klasöründen paylaşılabilir paket kodu üretir.
+/// Server sahibi: mod klasöründen paylaşılabilir paket kodu üretir. `instance` verilirse onun mods klasörü kullanılır.
 #[tauri::command]
-async fn make_pack(handle: AppHandle, path: String, name: String, address: String, game: String, loader: String, version: Option<String>) -> CmdResult<kazma_engine::serverkit::PackBuild> {
-    tauri::async_runtime::spawn_blocking(move || app::make_pack(std::path::Path::new(&path), &name, &address, &game, &loader, version, &Events(handle)))
+async fn make_pack(handle: AppHandle, state: State<'_, AppState>, instance: Option<String>, path: String, name: String, address: String, game: String, loader: String, version: Option<String>) -> CmdResult<kazma_engine::serverkit::PackBuild> {
+    let dir = match instance {
+        Some(id) => app::instance_dir(&state.root, &id)?.join("mods"),
+        None => std::path::PathBuf::from(path),
+    };
+    tauri::async_runtime::spawn_blocking(move || app::make_pack(&dir, &name, &address, &game, &loader, version, &Events(handle)))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Instance klasörünü Dosya Gezgini'nde açar.
+#[tauri::command]
+fn open_instance_folder(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    app::open_instance_folder(&state.root, &id)
+}
+
+// ---------- skinler ----------
+
+#[tauri::command]
+fn list_skins(state: State<'_, AppState>) -> Vec<skins::SkinInfo> {
+    skins::list_skins(&state.root)
+}
+
+#[tauri::command]
+fn skin_data(state: State<'_, AppState>, id: String) -> CmdResult<String> {
+    skins::skin_data_url(&state.root, &id)
+}
+
+#[tauri::command]
+fn add_skin(state: State<'_, AppState>, name: String, data: String) -> CmdResult<skins::SkinInfo> {
+    skins::add_skin_b64(&state.root, &name, &data)
+}
+
+#[tauri::command]
+async fn fetch_skin(state: State<'_, AppState>, player: String) -> CmdResult<skins::SkinInfo> {
+    let root = state.root.clone();
+    tauri::async_runtime::spawn_blocking(move || skins::add_from_username(&root, &player)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn delete_skin(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    let c = app::load_config(&state.root);
+    if c.skin.as_deref() == Some(id.as_str()) {
+        app::set_skin(&state.root, None)?;
+    }
+    skins::delete_skin(&state.root, &id)
+}
+
+/// `id` boşsa seçim kaldırılır.
+#[tauri::command]
+fn select_skin(state: State<'_, AppState>, id: Option<String>) -> CmdResult<app::Config> {
+    app::set_skin(&state.root, id)
 }
 
 #[tauri::command]
@@ -167,26 +215,17 @@ fn join_run(handle: AppHandle, state: State<'_, AppState>, trust: bool) -> CmdRe
     Ok(())
 }
 
+/// `kind`: mod, resourcepack ya da shader.
 #[tauri::command]
-async fn search_mods(state: State<'_, AppState>, instance: String, query: String, category: Option<String>) -> CmdResult<Vec<modrinth::Hit>> {
-    let info = app::read_info(&state.root, &instance)?;
-    if info.loader == "vanilla" {
-        return Err("Mod eklemek için Fabric, Quilt, Forge ya da NeoForge'lu bir instance seç.".into());
-    }
-    tauri::async_runtime::spawn_blocking(move || modrinth::search_live(&query, &info.game, &info.loader, category.as_deref())).await.map_err(|e| e.to_string())?
+async fn search_content(state: State<'_, AppState>, instance: String, kind: String, query: String, category: Option<String>) -> CmdResult<Vec<modrinth::Hit>> {
+    let root = state.root.clone();
+    tauri::async_runtime::spawn_blocking(move || app::search_content(&root, &instance, &kind, &query, category.as_deref())).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn install_mod(handle: AppHandle, state: State<'_, AppState>, instance: String, project: String) -> CmdResult<Vec<String>> {
-    let info = app::read_info(&state.root, &instance)?;
-    if info.loader == "vanilla" {
-        return Err("Mod eklemek için Fabric, Quilt, Forge ya da NeoForge'lu bir instance seç.".into());
-    }
-    if info.managed {
-        return Err("Bu instance'ın modlarını server'ın manifesti yönetir; elle mod eklenmez.".into());
-    }
-    let dir = state.root.join("instances").join(&info.id).join("mods");
-    tauri::async_runtime::spawn_blocking(move || modrinth::install_live(&dir, &project, &info.game, &info.loader, &Events(handle))).await.map_err(|e| e.to_string())?
+async fn install_content(handle: AppHandle, state: State<'_, AppState>, instance: String, kind: String, project: String) -> CmdResult<Vec<String>> {
+    let root = state.root.clone();
+    tauri::async_runtime::spawn_blocking(move || app::install_content(&root, &instance, &kind, &project, &Events(handle))).await.map_err(|e| e.to_string())?
 }
 
 fn main() {
@@ -200,6 +239,13 @@ fn main() {
             get_instances,
             delete_instance,
             make_pack,
+            open_instance_folder,
+            list_skins,
+            skin_data,
+            add_skin,
+            fetch_skin,
+            delete_skin,
+            select_skin,
             get_versions,
             create_instance,
             probe_server,
@@ -208,8 +254,8 @@ fn main() {
             launch_instance,
             join_prepare,
             join_run,
-            search_mods,
-            install_mod
+            search_content,
+            install_content
         ])
         .run(tauri::generate_context!())
         .expect("Kazma başlatılamadı");
