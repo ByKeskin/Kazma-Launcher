@@ -4,7 +4,7 @@
 use crate::install::{self, GameExit};
 use crate::net::*;
 use crate::report::Reporter;
-use crate::{discord, gametheme, importer, modrinth, serverkit, skins, sync};
+use crate::{discord, gametheme, importer, modtheme, modrinth, serverkit, skins, sync};
 use kazma_core::instance::{self, InstanceSpec, LoaderSpec};
 use crate::ping;
 use kazma_core::invite::{self, Invite};
@@ -280,6 +280,11 @@ pub struct InstanceInfo {
     /// Kayıtta tutulmaz, listelerken hesaplanır.
     #[serde(default, skip_deserializing)]
     pub mods: usize,
+    /// Kazma Tema modu kurulu mu / bu instance için kurulabilir mi? (listelerken hesaplanır)
+    #[serde(default, skip_deserializing)]
+    pub theme_mod: bool,
+    #[serde(default, skip_deserializing)]
+    pub theme_eligible: bool,
 }
 
 fn now() -> u64 {
@@ -302,6 +307,8 @@ pub fn read_info(root: &Path, id: &str) -> R<InstanceInfo> {
     let mut i: InstanceInfo = serde_json::from_str(&t).map_err(|e| format!("instance.json okunamadı: {e}"))?;
     i.id = id.to_string(); // klasör adı esastır
     i.mods = count_mods(&root.join("instances").join(id).join("mods"));
+    i.theme_mod = modtheme::installed(&root.join("instances").join(id).join("mods"));
+    i.theme_eligible = modtheme::eligible(&i.loader, &i.game);
     Ok(i)
 }
 
@@ -349,6 +356,8 @@ fn info_for(spec: &InstanceSpec, name: &str, kind: &str, host: Option<(&str, u16
         managed,
         source: None,
         mods: 0,
+        theme_mod: false,
+        theme_eligible: false,
     }
 }
 
@@ -443,6 +452,25 @@ pub fn presence_for(cfg: &Config, info: &InstanceInfo) -> Option<(String, discor
         _ => format!("Minecraft {} · {loader}", info.game),
     };
     Some((app, discord::Activity { details: "Kazma Launcher'da oynuyor".into(), state, start: now(), large_image: "kazma".into(), large_text: "Kazma Launcher".into() }))
+}
+
+/// Kazma Tema modunu (ve gerekli Fabric API'yi) instance'a kurar; launcher temasının rengini mod için yazar.
+pub fn install_theme_mod(root: &Path, instance: &str, rep: &dyn Reporter) -> R<()> {
+    let info = read_info(root, instance)?;
+    let dir = root.join("instances").join(&info.id);
+    let game = info.game.clone();
+    modtheme::install_with(&dir, &info.loader, &info.game, &modtheme::fetch_live, &|m: &Path| {
+        modrinth::install_live(m, "fabric-api", &game, Some("fabric"), modrinth::Kind::Mod, rep).map(|_| ())
+    }, rep)?;
+    let cfg = load_config(root);
+    let _ = fs::create_dir_all(dir.join("config"));
+    let _ = write_atomic(&dir.join("config").join("kazma-theme.txt"), cfg.theme_variant.as_bytes());
+    Ok(())
+}
+
+pub fn remove_theme_mod(root: &Path, instance: &str) -> R<()> {
+    let info = read_info(root, instance)?;
+    modtheme::remove(&root.join("instances").join(&info.id))
 }
 
 pub fn set_game_theme(root: &Path, enabled: bool, variant: &str) -> R<Config> {

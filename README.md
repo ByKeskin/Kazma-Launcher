@@ -187,3 +187,12 @@ Katıldığım server'lar ve kendi server'larım kartlarında **Sil** düğmesi 
 
 Derleme GitHub Actions'ta (`Kazma Tema modu` iş akışı) yapılır; çıkan `kazma-theme-*.jar` dosyasını instance'ın `mods` klasörüne at. Mod hata verirse kendini susturur, oyunu çökertmez. Renk, launcher'ın yazdığı `config/kazma-theme.txt` dosyasından okunur. Çizim mantığı oyundan bağımsız test edilir: `mod/tools/FxCheck.java`.
 Not: Minecraft'ın pencere çerçevesi (başlık çubuğu) Windows'a aittir; mob şeridi bu yüzden pencerenin içinde, menülerin üstündedir.
+
+## Kurulum sihirbazı (arkadaşlara vermek için)
+GitHub Actions her derlemede `Kazma-Kurulum.exe` üretir (NSIS sihirbazı: Türkçe, yönetici izni istemez, Başlat menüsü ve masaüstü kısayolu, kaldırıcı, gerekirse WebView2'yi kendisi indirir).
+- **Sürüm yayınlamak:** `git tag v0.1.0 && git push origin v0.1.0` — Actions, Releases sayfasına `Kazma-Kurulum.exe` ve taşınabilir `Kazma.exe` ekler. Arkadaşlarına o sayfanın bağlantısını ver.
+- **Windows uyarısı:** Dosya imzasız olduğu için ilk açılışta "Bilgisayarınızı korudu" çıkar: **Ek bilgi → Yine de çalıştır**. Uyarıyı kaldırmak için yıllık ücretli kod imzalama sertifikası gerekir.
+- **Kaldırma:** Ayarlar → Uygulamalar'dan. Oyun dosyaları ve dünyalar `%APPDATA%\.kazma` içinde kalır (silmek senin kararın).
+
+## Tema modunu launcher'dan kurmak
+Kütüphane'de Fabric + Minecraft 26.x instance'larında **Tema modunu uygula** düğmesi çıkar. Düğme modu bu deponun `mod-latest` sürümünden indirir (SHA-256 ve jar içeriği doğrulanır), gerekli Fabric API'yi ekler. **Tema modunu kaldır** aynı düğmeyle geri alır. `mod-latest` sürümünü `Kazma Tema modu` iş akışı main'e her gönderimde günceller; iş akışı kırmızıysa düğme "henüz yayınlanmamış" der.

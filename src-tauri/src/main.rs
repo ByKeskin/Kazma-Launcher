@@ -366,6 +366,17 @@ fn set_game_theme(state: State<'_, AppState>, enabled: bool, variant: String) ->
 }
 
 #[tauri::command]
+async fn theme_mod_install(handle: AppHandle, state: State<'_, AppState>, instance: String) -> CmdResult<()> {
+    let root = state.root.clone();
+    tauri::async_runtime::spawn_blocking(move || app::install_theme_mod(&root, &instance, &Events(handle))).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn theme_mod_remove(state: State<'_, AppState>, instance: String) -> CmdResult<()> {
+    app::remove_theme_mod(&state.root, &instance)
+}
+
+#[tauri::command]
 fn set_discord(state: State<'_, AppState>, enabled: bool, app_id: String) -> CmdResult<app::Config> {
     app::set_discord(&state.root, enabled, &app_id)
 }
@@ -676,7 +687,9 @@ fn main() {
             tunnel_stop,
             tunnel_open_claim,
             set_discord,
-            set_game_theme
+            set_game_theme,
+            theme_mod_install,
+            theme_mod_remove
         ])
         .build(tauri::generate_context!())
         .expect("Kazma başlatılamadı")

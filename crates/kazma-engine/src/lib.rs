@@ -7,6 +7,7 @@ pub mod importer;
 pub mod install;
 pub mod loaders;
 pub mod modrinth;
+pub mod modtheme;
 pub mod net;
 pub mod ping;
 pub mod report;

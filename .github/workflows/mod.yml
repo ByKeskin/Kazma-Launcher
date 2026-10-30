@@ -4,6 +4,8 @@ on:
     branches: [main]
     paths: ['mod/**', '.github/workflows/mod.yml']
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -30,3 +32,13 @@ jobs:
           path: |
             mod/build/libs/kazma-theme-*.jar
             !mod/build/libs/*-sources.jar
+      - name: Launcher için yayınla (mod-latest)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          JAR=$(ls mod/build/libs/kazma-theme-*.jar | grep -v sources | head -1)
+          cp "$JAR" kazma-theme.jar
+          sha256sum kazma-theme.jar | cut -d' ' -f1 > kazma-theme.jar.sha256
+          gh release view mod-latest >/dev/null 2>&1 || gh release create mod-latest --prerelease --title "Kazma Tema modu (otomatik)" --notes "Launcher bu dosyayı otomatik indirir; elle kurman gerekmez."
+          gh release upload mod-latest kazma-theme.jar kazma-theme.jar.sha256 --clobber

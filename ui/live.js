@@ -285,7 +285,8 @@
     var cards = instances.map(function (i) {
       return '<article class="card inst"><div class="thumb"><canvas data-cid="' + esc(i.id) + '" aria-hidden="true"></canvas><button class="del" data-del="' + esc(i.id) + '" aria-label="' + esc(i.name) + ' instance\'ını sil" title="Sil">' + trashIcon() + '</button></div><div class="body"><h3>' + esc(i.name) + '</h3>' +
         '<div class="meta"><span class="pill mute">' + esc(loaderLabel(i)) + '</span><span class="pill mute">' + esc(i.game) + '</span><span class="pill mute">' + i.mods + ' mod</span>' +
-        (i.kind === 'server' ? '<span class="pill acc">Server</span>' : '') + '</div>' +
+        (i.kind === 'server' ? '<span class="pill acc">Server</span>' : '') + (i.theme_mod ? '<span class="pill good">Tema modu</span>' : '') + '</div>' +
+        (i.theme_eligible ? '<div><button class="btn sm' + (i.theme_mod ? '' : ' primary') + '" data-tm="' + esc(i.id) + '" data-on="' + (i.theme_mod ? '1' : '') + '">' + (i.theme_mod ? 'Tema modunu kaldır' : 'Tema modunu uygula') + '</button></div>' : '') +
         '<div class="foot"><span>' + esc(ago(i.last_played)) + '</span><span class="acts2"><button class="btn sm icon" data-open="' + esc(i.id) + '" title="Dosya konumunu aç" aria-label="' + esc(i.name) + ' klasörünü aç">' + kz.ic('folder', 16) + '</button>' + playButton(i, 'sm') + '</span></div></div></article>';
     }).join('');
     $('#v-library').innerHTML =
@@ -598,6 +599,13 @@
     var rs = e.target.closest('[data-resync]'); if (rs) { resync(rs.dataset.resync); return; }
     var p = e.target.closest('[data-play]'); if (p) { play(p.dataset.play); return; }
     if (e.target.closest('[data-newinst]')) { openNew(); return; }
+    var tm = e.target.closest('[data-tm]');
+    if (tm) {
+      if (tm.dataset.on) { inv('theme_mod_remove', { instance: tm.dataset.tm }).then(function () { toast('Tema modu kaldırıldı'); return refresh(false); }).catch(function (er) { toast(errText(er)); }); return; }
+      openLaunch('Kazma Tema modu'); tm.disabled = true;
+      inv('theme_mod_install', { instance: tm.dataset.tm }).then(function () { doneStep(); $('#launchModal').hidden = true; toast('Tema modu kuruldu. Oyunu açınca görünür'); return refresh(false); }).catch(function (er) { tm.disabled = false; launchFail(er); });
+      return;
+    }
     var o = e.target.closest('[data-open]'); if (o) { inv('open_instance_folder', { id: o.dataset.open }).catch(function (er) { toast(errText(er)); }); return; }
     var go = e.target.closest('[data-bgo]'); if (go) { searchBrowse(go.dataset.bgo); return; }
     var bc = e.target.closest('[data-bcat]');
