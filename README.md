@@ -137,3 +137,25 @@ Güvenlik kuralları testlerle sabitlenmiştir: yol atlatma (`../x.jar`), http a
 4. Eski sürümler: `map_to_resources` asset düzeni.
 5. Server yöneticisi: jar indirme, süreç başlatma, konsol akışı, UPnP/tünel, karma giriş eklentisi.
 6. Mod gezgini: Modrinth API v2.
+
+## Skin: güvenilir siteler
+Skinler sayfasında yalnızca Kazma'nın bildiği siteler kullanılır: Mojang (oyuncu adı), NameMC (skin bağlantısı), Ely.by (oyuncu adı); Skindex ve Planet Minecraft yalnızca tarayıcıda açılır. Bağlantılar katı biçimde doğrulanır (namemc.com/skin/<16 hex>, textures.minecraft.net/texture/<64 hex>), inen dosya PNG olarak doğrulanır (64x64 / 64x32, en çok 200 KB).
+
+## Diğer launcher'lardan içe aktarma
+- **İçe Aktar** sayfası resmi launcher, TLauncher, SKLauncher, Prism/MultiMC, ATLauncher, GDLauncher, CurseForge ve Modrinth klasörlerini tarar; listede olmayan klasör elle eklenebilir.
+- Dünyalar, ayarlar (options.txt), server listesi, kaynak paketleri, shader'lar ve modlar **kopyalanır**; kaynak dosyalara dokunulmaz, aynı adlı dünya ezilmez, sembolik bağlar izlenmez.
+- Profilin sürümünden (Vanilla/Fabric/Quilt/Forge/NeoForge) yeni instance oluşturulabilir ya da var olan instance'a aktarılır.
+- Hesap kutusundan diğer launcher'lardaki oyuncu adı ve kimlik (UUID) seçilebilir; server'daki envanter aynı oyuncuya bağlı kalır. Erişim anahtarları (token) hiç okunmaz.
+- Not: çevrimdışı modda server, oyuncuyu ad/UUID ile tanır. Premium bir server'daki envanter için Microsoft girişi (Mojang onayı bekliyor) gerekir.
+
+## Serverlar
+- **Katıldığım server'lar:** katıldığın server'lar listelenir; her biri için canlı durum (yeşil nokta çevrimiçi, kırmızı çevrimdışı/uyuyor) ve oyuncu sayısı gösterilir.
+- **Server kur:** Vanilla, Paper, Fabric, Forge, NeoForge. Jar'lar resmî kaynaklardan indirilir (Mojang SHA-1, Paper SHA-256, Forge/NeoForge kurucu SHA-1). EULA'yı kabul etmeden kurulmaz.
+  - *Bu bilgisayarda:* Kazma içinden başlat / kapat / yeniden başlat, canlı konsol ve komut kutusu (ayrı cmd penceresi açılmaz), server.properties ayarları, Modrinth'ten mod/eklenti ekleme, dış adres.
+  - *Ayrı makinede:* server dosyaları + start.bat/start.sh + OKU-BENI.txt içeren bir zip paketi üretir. Launcher o makineyi uzaktan yönetmez.
+- **Mod eşitleme:** Fabric/Forge/NeoForge server'ların mod klasöründen paket kodu üretilir; oyuncular kodu "Server'a Katıl" sayfasına yapıştırınca modlar otomatik iner.
+- **Port yönlendirme (UPnP):** server başlayınca router'da port otomatik açılır, kapanınca kapatılır. Router'ın dış IP'si özel/CGNAT ise (internetten erişilemez) konsolda uyarılır.
+- **Tünel (playit.gg):** UPnP işe yaramazsa. Resmî ajan indirilir, Windows'ta Authenticode imzası doğrulanmadan çalıştırılmaz. Hesap bağlama ve tünel oluşturma playit.gg sitesinde bir kez elle yapılır; tünel adresi Bağlantı sekmesine yazılır.
+
+## Discord etkinliği
+Hesap penceresinden Discord uygulama kimliği girilirse oyun açıkken "Kazma Launcher'da oynuyor" görünür. Kimlik için Discord Developer Portal'da bir uygulama oluştur; Rich Presence → Art Assets'e `assets/discord-large.png` dosyasını **kazma** adıyla yükle. Discord kapalıysa ya da kimlik boşsa hiçbir şey olmaz.

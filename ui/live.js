@@ -50,11 +50,12 @@
     '<h2 id="loginTitle">Hesap</h2>' +
     '<div class="seg" id="loginSeg" style="grid-template-columns:repeat(2,1fr)"><button aria-pressed="true" data-l="off">Çevrimdışı</button><button aria-pressed="false" data-l="ms">Microsoft</button></div>' +
     '<div id="lg-off" style="display:flex;flex-direction:column;gap:10px"><div class="field"><label for="offName">Oyuncu adı</label><input id="offName" class="in" maxlength="16" placeholder="3-16 karakter, harf, rakam, _" autocomplete="off"></div>' +
-    '<div class="err" id="offErr" aria-live="polite"></div><p class="hint">Çevrimdışı hesapla tek kişilik dünyalara ve karma girişi açık server\'lara girilir.</p></div>' +
+    '<div class="err" id="offErr" aria-live="polite"></div><p class="hint">Çevrimdışı hesapla tek kişilik dünyalara ve karma girişi açık server\'lara girilir.</p>' +
+    '<div class="field"><label>Diğer launcher\'lardan al</label><div id="foundAccts" style="display:flex;flex-direction:column;gap:6px"><span class="hint">Taranıyor...</span></div><p class="hint">Aynı ad ve kimlik kullanılır; server\'daki envanterin ve ilerlemen aynı oyuncuya bağlı kalır.</p></div></div>' +
     '<div id="lg-ms" style="display:none;flex-direction:column;gap:10px"><p>Microsoft ile giriş henüz etkin değil. Minecraft\'ın giriş servisi yeni uygulamalar için Mojang onayı istiyor ve başvurumuz beklemede.</p><p class="hint">Onay gelince bu sekmeden giriş yapılacak. O zamana kadar çevrimdışı hesapla oynayabilirsin.</p></div>' +
     '<div style="display:flex;gap:10px;justify-content:flex-end"><button class="btn" id="loginCancel">Vazgeç</button><button class="btn primary" id="loginOk">Kaydet</button></div></div></div>';
   var lmode = 'off';
-  function openLogin() { $('#offName').value = cfg.player; $('#offErr').textContent = ''; $('#loginModal').hidden = false; $('#offName').focus(); }
+  function openLogin() { $('#offName').value = cfg.player; $('#offErr').textContent = ''; $('#loginModal').hidden = false; $('#offName').focus(); loadFoundAccounts(); }
   acctBtn.addEventListener('click', openLogin);
   $('#loginCancel').addEventListener('click', function () { $('#loginModal').hidden = true; });
   $('#loginSeg').addEventListener('click', function (e) {
@@ -69,6 +70,83 @@
       cfg = c; renderAccount(); $('#loginModal').hidden = true; toast(c.player + ' olarak oynayacaksın'); renderHome();
     }).catch(function (e) { $('#offErr').textContent = errText(e); });
   });
+
+
+  /* ---------- içe aktar (diğer launcher'lar) ---------- */
+  var impSources = [], impSel = {};
+  function renderImport() {
+    $('#v-import').innerHTML = '<div class="ph"><div><h1>İçe aktar</h1><p>Resmi launcher, TLauncher, SKLauncher, Prism, CurseForge ve benzerlerindeki dünyaları ve ayarları Kazma\'ya kopyala. Orijinal dosyalara dokunulmaz.</p></div></div><div class="card hint">Taranıyor...</div>';
+    inv('scan_sources').then(function (l) { impSources = l; drawImport(); }).catch(function (e) { $('#v-import').innerHTML += '<div class="err">' + esc(errText(e)) + '</div>'; });
+  }
+  function profOpts(src) {
+    return src.profiles.map(function (p, i) {
+      return p.game ? '<option value="' + i + '">' + esc(p.name) + ' (' + esc(p.game) + ' · ' + esc(loaderName(p.loader)) + ')</option>' : '';
+    }).join('');
+  }
+  function drawImport() {
+    var mine = (window.__kzInst || []);
+    var cards = impSources.map(function (s) {
+      var worlds = s.worlds.map(function (w) {
+        return '<label class="chk"><input type="checkbox" data-iw="' + esc(s.id) + '" value="' + esc(w.name) + '"> ' + esc(w.name) + ' <span class="hint">' + w.size_mb + ' MB</span></label>';
+      }).join('') || '<span class="hint">Dünya bulunamadı</span>';
+      var po = profOpts(s);
+      return '<article class="card" style="display:flex;flex-direction:column;gap:12px"><div><b>' + esc(s.launcher) + '</b><div class="hint" style="word-break:break-all">' + esc(s.path) + '</div>' +
+        '<div class="hint">' + s.worlds.length + ' dünya · ' + s.mods + ' mod · ' + s.resourcepacks + ' kaynak paketi · ' + s.shaderpacks + ' shader</div></div>' +
+        '<div class="field"><label>Dünyalar</label><div style="display:flex;flex-direction:column;gap:4px">' + worlds + '</div></div>' +
+        '<div style="display:flex;gap:14px;flex-wrap:wrap">' +
+        (s.has_options ? '<label class="chk"><input type="checkbox" data-ix="' + esc(s.id) + '" value="options"> Ayarlar (options.txt)</label>' : '') +
+        (s.has_servers ? '<label class="chk"><input type="checkbox" data-ix="' + esc(s.id) + '" value="servers"> Server listesi</label>' : '') +
+        (s.resourcepacks ? '<label class="chk"><input type="checkbox" data-ix="' + esc(s.id) + '" value="resourcepacks"> Kaynak paketleri</label>' : '') +
+        (s.shaderpacks ? '<label class="chk"><input type="checkbox" data-ix="' + esc(s.id) + '" value="shaderpacks"> Shader\'lar</label>' : '') +
+        (s.mods ? '<label class="chk"><input type="checkbox" data-ix="' + esc(s.id) + '" value="mods"> Modlar</label>' : '') + '</div>' +
+        '<div class="field"><label>Hedef</label><select class="in" data-it="' + esc(s.id) + '">' +
+        (po ? '<optgroup label="Bu profilden yeni instance">' + po + '</optgroup>' : '') +
+        '<optgroup label="Var olan instance">' + instances.map(function (i) { return '<option value="i:' + esc(i.id) + '">' + esc(i.name) + ' (' + esc(i.game) + ')</option>'; }).join('') + '</optgroup></select></div>' +
+        '<div class="err" data-ie="' + esc(s.id) + '" aria-live="polite" style="white-space:pre-wrap"></div>' +
+        '<div><button class="btn primary" data-imp="' + esc(s.id) + '">' + kz.ic('download', 16) + 'Aktar</button></div></article>';
+    }).join('');
+    $('#v-import').innerHTML = '<div class="ph"><div><h1>İçe aktar</h1><p>Resmi launcher, TLauncher, SKLauncher, Prism, CurseForge ve benzerlerindeki dünyaları ve ayarları Kazma\'ya kopyala. Orijinal dosyalara dokunulmaz.</p></div></div>' +
+      '<div class="card" style="display:flex;flex-direction:column;gap:10px"><div class="callout">' + kz.ic('shield', 20) + '<div>Dünyalar kopyalanır, kaynak klasör değişmez; aynı adlı dünya varsa ezilmez. Sağ üstteki hesap kutusundan, diğer launcher\'lardaki oyuncu adını ve kimliğini (UUID) seçebilirsin; böylece server\'daki envanterin aynı oyuncuya bağlı kalır. Erişim anahtarların (token) okunmaz.</div></div>' +
+      '<div class="joinbar"><input id="impPath" class="in" style="flex:1;min-width:240px" placeholder="Listede yoksa oyun klasörünü yaz (örn. D:\\Oyunlar\\.minecraft)"><button class="btn" id="impAdd">' + kz.ic('folder', 16) + 'Klasör ekle</button><button class="btn" id="impRe">' + kz.ic('refresh', 16) + 'Yeniden tara</button></div><div class="err" id="impErr"></div></div>' +
+      (impSources.length ? cards : '<div class="card hint">Başka bir launcher bulunamadı. Yukarıdan oyun klasörünü elle ekleyebilirsin.</div>');
+    $('#impRe').addEventListener('click', renderImport);
+    $('#impAdd').addEventListener('click', function () {
+      inv('add_source', { path: $('#impPath').value.trim() }).then(function (l) { impSources = l; drawImport(); }).catch(function (e) { $('#impErr').textContent = errText(e); });
+    });
+    $$('[data-imp]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var id = b.dataset.imp, q = function (a) { return Array.prototype.map.call($$('[' + a + '="' + id + '"]:checked'), function (c) { return c.value; }); };
+        var worlds = q('data-iw'), xs = q('data-ix'), tgt = $('[data-it="' + id + '"]').value, err = $('[data-ie="' + id + '"]');
+        var req = { source: id, worlds: worlds, extras: { options: xs.indexOf('options') >= 0, servers: xs.indexOf('servers') >= 0, resourcepacks: xs.indexOf('resourcepacks') >= 0, shaderpacks: xs.indexOf('shaderpacks') >= 0, mods: xs.indexOf('mods') >= 0 } };
+        if (tgt.indexOf('i:') === 0) req.instance = tgt.slice(2); else req.profile = parseInt(tgt, 10);
+        if (!tgt) { err.textContent = 'Önce bir hedef seç (yeni instance için profil ya da var olan instance).'; return; }
+        if (!worlds.length && !xs.length) { err.textContent = 'Aktarılacak en az bir şey seç.'; return; }
+        err.textContent = ''; openLaunch('İçe aktarılıyor');
+        b.disabled = true;
+        inv('import_run', { req: req }).then(function (r) {
+          doneStep(); $('#launchModal').hidden = true; b.disabled = false;
+          toast(r.worlds.length + ' dünya aktarıldı: ' + r.instance.name); return refresh(false);
+        }).catch(function (e) { b.disabled = false; launchFail(e); });
+      });
+    });
+  }
+
+  /* hesap: diğer launcher'lardan kimlik seç */
+  function loadFoundAccounts() {
+    var box = $('#foundAccts'); if (!box) return;
+    inv('scan_accounts').then(function (l) {
+      box.innerHTML = l.length ? l.map(function (a, i) {
+        return '<button class="btn sm" data-fa="' + i + '" style="justify-content:flex-start">' + esc(a.name) + ' <span class="hint">· ' + esc(a.launcher) + ' · ' + esc(a.kind) + '</span></button>';
+      }).join('') : '<span class="hint">Başka launcher\'da hesap bulunamadı.</span>';
+      $$('[data-fa]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var a = l[+b.dataset.fa];
+          inv('set_identity', { name: a.name, uuid: a.uuid }).then(function (c) { cfg = c; renderAccount(); $('#loginModal').hidden = true; toast(a.name + ' kimliği kullanılıyor'); renderHome(); })
+            .catch(function (e) { $('#offErr').textContent = errText(e); });
+        });
+      });
+    }).catch(function () { box.innerHTML = ''; });
+  }
 
   /* ---------- başlatma penceresi ---------- */
   $('#launchModal').outerHTML =
@@ -216,16 +294,6 @@
       '<div class="grid">' + cards + '<button class="add" data-newinst="1"><span>' + kz.ic('plus', 28) + '</span>Yeni instance oluştur<small class="hint">Sürüm ve mod yükleyici seç</small></button></div>';
     $$('#v-library canvas[data-cid]').forEach(function (cv) { scene(cv, cv.dataset.cid); });
   }
-
-  /* ---------- server'lar (henüz yok) ---------- */
-  (function () {
-    var v = $('#v-servers');
-    Array.prototype.slice.call(v.children).forEach(function (c) { c.style.display = 'none'; });
-    v.insertAdjacentHTML('afterbegin',
-      '<div class="ph"><div><h1>Serverlar</h1></div></div><div class="card view-note"><h2>Server yöneticisi bir sonraki sürümde</h2>' +
-      '<p style="margin:8px 0 14px;color:var(--ink-2)">Server kurma, başlatma ve konsol henüz bu pencerede yok. Server\'ın modlarını oyunculara otomatik dağıtan kısım ise hazır ve <b>Server\'a Katıl</b> sayfasından denenebilir.</p>' +
-      '<p class="hint">Server sahibi araçları şimdilik komut satırında: <code>kazma-cli make-key</code>, <code>make-manifest</code>, <code>make-invite</code>. Ayrıntılar README\'de.</p></div>');
-  })();
 
   /* ---------- server'a katıl ---------- */
   var ST = { ready: ['good', 'Hazır'], download: ['warn', 'İndirilecek'], update: ['warn', 'Güncellenecek'], disable: ['bad', 'Devre dışı olacak'], keep: ['mute', 'Yerelde kalır'] };
@@ -436,6 +504,7 @@
     var k = HASHKIND[location.hash.slice(1)];
     if (k && !bst[k].loaded) { bst[k].loaded = true; renderBrowse(k); }
     if (location.hash === '#skins') renderSkins();
+    if (location.hash === '#import') renderImport();
   });
 
   /* ---------- skinler ---------- */
@@ -457,8 +526,9 @@
     };
     img.src = dataUrl;
   }
+  var srcList = [];
   function renderSkins() {
-    inv('list_skins').then(function (l) { skinList = l; drawSkinsPage(); }).catch(function (e) { toast(errText(e)); });
+    Promise.all([inv('list_skins'), inv('skin_sources')]).then(function (r) { skinList = r[0]; srcList = r[1]; drawSkinsPage(); }).catch(function (e) { toast(errText(e)); });
   }
   function drawSkinsPage() {
     var mi = instances.filter(function (i) { return i.loader !== 'vanilla' && !i.managed; });
@@ -475,6 +545,13 @@
       '<div class="field" style="flex:1;min-width:220px"><label for="skinFile">PNG dosyasından (64x64 ya da 64x32)</label><input id="skinFile" class="in" type="file" accept="image/png"></div>' +
       '<div class="field" style="flex:1;min-width:220px"><label for="skinUser">Oyuncu adıyla (Mojang\'dan indirir)</label><div class="joinbar"><input id="skinUser" class="in" maxlength="16" placeholder="örn. Notch" autocomplete="off"><button class="btn primary" id="skinFetch">' + kz.ic('download', 16) + 'İndir</button></div></div></div>' +
       '<div class="err" id="skinErr" aria-live="polite"></div></div>' +
+      '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Güvenilir skin siteleri</h2>' +
+      '<div class="callout">' + kz.ic('shield', 20) + '<div>Yalnızca aşağıdaki siteler kullanılır. "Siteyi aç" tarayıcında açar; beğendiğin skinin bağlantısını ya da oyuncu adını buraya yapıştır, Kazma indirip PNG olarak doğrular. Başka adreslerden indirme yapılmaz.</div></div>' +
+      '<div class="skin-src">' + srcList.map(function (s) {
+        return '<div class="card" style="display:flex;flex-direction:column;gap:8px"><div><b>' + esc(s.name) + '</b><div class="hint">' + esc(s.note) + '</div></div><button class="btn sm" data-open-src="' + esc(s.browse) + '">' + kz.ic('globe', 14) + 'Siteyi aç</button></div>';
+      }).join('') + '</div>' +
+      '<div class="joinbar"><div class="field" style="flex:1;min-width:220px"><label for="skinLink">NameMC ya da Mojang skin bağlantısı</label><div class="joinbar"><input id="skinLink" class="in" placeholder="https://namemc.com/skin/..." autocomplete="off"><button class="btn primary" id="skinLinkGo">' + kz.ic('download', 16) + 'İndir</button></div></div>' +
+      '<div class="field" style="flex:1;min-width:220px"><label for="skinEly">Ely.by oyuncu adı</label><div class="joinbar"><input id="skinEly" class="in" maxlength="16" placeholder="oyuncu adı" autocomplete="off"><button class="btn primary" id="skinElyGo">' + kz.ic('download', 16) + 'İndir</button></div></div></div></div>' +
       (skinList.length ? '<div class="skin-grid">' + cards + '</div>' : '<div class="card hint">Henüz skin yok. Yukarıdan bir dosya seç ya da bir oyuncu adıyla indir.</div>') +
       '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Skin oyunda görünsün</h2>' +
       '<div class="callout">' + kz.ic('shield', 20) + '<div>Çevrimdışı hesaplarda vanilla Minecraft skin göstermez. Seçtiğin skinin oyunda görünmesi için instance\'a <b>CustomSkinLoader</b> modu gerekir. Skin yalnızca kendi ekranında görünür, server\'daki diğer oyuncular görmez (onların da aynı modu kullanması gerekir). Microsoft girişi gelince gerçek skin yüklemesi eklenecek.</div></div>' +
@@ -495,6 +572,13 @@
       inv('fetch_skin', { player: $('#skinUser').value.trim() }).then(function (s) { toast(s.name + ' skini eklendi'); renderSkins(); })
         .catch(function (e) { $('#skinErr').textContent = errText(e); b.disabled = false; });
     });
+    $$('[data-open-src]').forEach(function (b) { b.addEventListener('click', function () { inv('open_url', { url: b.dataset.openSrc }).catch(function (e) { $('#skinErr').textContent = errText(e); }); }); });
+    function skinGo(btn, cmd, args) {
+      btn.disabled = true; $('#skinErr').textContent = '';
+      inv(cmd, args).then(function (s) { toast(s.name + ' skini eklendi'); renderSkins(); }).catch(function (e) { $('#skinErr').textContent = errText(e); btn.disabled = false; });
+    }
+    $('#skinLinkGo').addEventListener('click', function () { skinGo(this, 'add_skin_link', { link: $('#skinLink').value.trim() }); });
+    $('#skinElyGo').addEventListener('click', function () { skinGo(this, 'add_skin_ely', { player: $('#skinEly').value.trim() }); });
     var csl = $('#skinCsl');
     if (csl) {
       $('#skinInst').addEventListener('change', function () { instSkinTarget = this.value; });
@@ -534,5 +618,11 @@
       if (rerender !== false && location.hash === '#skins') drawSkinsPage();
     }).catch(function (e) { toast(errText(e)); });
   }
+  window.__kz.live = {
+    inv: inv, listen: listen, esc: esc, $: $, $$: $$, toast: toast, errText: errText, openLaunch: openLaunch, doneStep: doneStep, launchFail: launchFail,
+    instances: function () { return instances; }, cfg: function () { return cfg; }, setCfg: function (c) { cfg = c; }, loaderName: loaderName,
+    versions: function (cb) { if (allVersions) return cb(allVersions); inv('get_versions', { snapshots: false }).then(function (l) { allVersions = l; cb(l); }).catch(function (e) { toast(errText(e)); }); }
+  };
+  document.dispatchEvent(new Event('kazma-live'));
   refresh().then(function () { if (!cfg.player) openLogin(); });
 })();

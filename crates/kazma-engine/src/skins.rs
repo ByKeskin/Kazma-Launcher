@@ -93,6 +93,72 @@ pub fn add_skin_b64(root: &Path, name: &str, b64: &str) -> R<SkinInfo> {
     add_skin(root, name, "dosya", &bytes)
 }
 
+// ---------- güvenilir kaynaklar ----------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkinSource {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub note: &'static str,
+    /// Tarayıcıda açılacak ana sayfa (yalnızca bu listedeki adresler açılır).
+    pub browse: Option<&'static str>,
+    /// Kazma'nın doğrudan indirebildiği yol: "oyuncu" (ad), "bağlantı" ya da yok (siteden PNG indirip dosyadan eklenir).
+    pub direct: Option<&'static str>,
+}
+
+pub fn trusted_sources() -> Vec<SkinSource> {
+    vec![
+        SkinSource { id: "mojang", name: "Mojang (resmi)", note: "Premium bir oyuncunun güncel skini; oyuncu adını yaz.", browse: None, direct: Some("oyuncu") },
+        SkinSource { id: "namemc", name: "NameMC", note: "Skin sayfasının adresini yapıştır, doku indirilir.", browse: Some("https://namemc.com/minecraft-skins"), direct: Some("bağlantı") },
+        SkinSource { id: "ely", name: "Ely.by", note: "Ely.by hesabı olan (çevrimdışı oyuncular dahil) birinin skini; oyuncu adını yaz.", browse: Some("https://ely.by/skins"), direct: Some("oyuncu") },
+        SkinSource { id: "skindex", name: "The Skindex", note: "Siteden PNG olarak indir, sonra \"PNG dosyasından\" ekle.", browse: Some("https://www.minecraftskins.com/"), direct: None },
+        SkinSource { id: "pmc", name: "Planet Minecraft", note: "Siteden PNG olarak indir, sonra \"PNG dosyasından\" ekle.", browse: Some("https://www.planetminecraft.com/skins/"), direct: None },
+    ]
+}
+
+/// Tarayıcıda açılabilecek adresler: yalnızca güvenilir listedeki ana sayfalar.
+pub fn browse_url_allowed(url: &str) -> bool {
+    trusted_sources().iter().any(|s| s.browse == Some(url))
+}
+
+fn is_hex(s: &str, n: usize) -> bool {
+    s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Yapıştırılan adresi doğrudan indirilebilir bir doku adresine çevirir. Yalnızca güvenilir kaynaklar kabul edilir:
+/// NameMC skin sayfası (`namemc.com/skin/<16 hex>`), NameMC dokusu (`s.namemc.com/i/<16 hex>.png`) ve
+/// Mojang CDN'i (`textures.minecraft.net/texture/<64 hex>`).
+pub fn texture_url_from_link(link: &str) -> R<(String, String)> {
+    let u = url::Url::parse(link.trim()).map_err(|_| "Bu geçerli bir bağlantı değil".to_string())?;
+    if u.scheme() != "https" {
+        return Err("Yalnızca https bağlantıları kabul edilir".into());
+    }
+    let host = u.host_str().unwrap_or("").trim_start_matches("www.").to_ascii_lowercase();
+    let seg: Vec<&str> = u.path_segments().map(|s| s.filter(|x| !x.is_empty()).collect()).unwrap_or_default();
+    let tail = |i: usize| seg.get(i).map(|s| s.trim_end_matches(".png")).unwrap_or("");
+    match (host.as_str(), seg.first().copied()) {
+        ("namemc.com", Some("skin")) if is_hex(tail(1), 16) => Ok((format!("https://s.namemc.com/i/{}.png", tail(1).to_ascii_lowercase()), format!("NameMC {}", &tail(1)[..6]))),
+        ("s.namemc.com", Some("i")) if is_hex(tail(1), 16) => Ok((format!("https://s.namemc.com/i/{}.png", tail(1).to_ascii_lowercase()), format!("NameMC {}", &tail(1)[..6]))),
+        ("textures.minecraft.net", Some("texture")) if is_hex(tail(1), 64) => Ok((format!("https://textures.minecraft.net/texture/{}", tail(1).to_ascii_lowercase()), format!("Mojang {}", &tail(1)[..6]))),
+        _ => Err("Bu adres güvenilir kaynak listesinde değil. Desteklenenler: NameMC skin sayfası, NameMC dokusu ve Mojang dokusu. Diğer siteler için PNG'yi indirip \"PNG dosyasından\" ekle.".into()),
+    }
+}
+
+pub fn add_from_link(root: &Path, link: &str) -> R<SkinInfo> {
+    let (url, name) = texture_url_from_link(link)?;
+    let bytes = get_bytes(&url, MAX_PNG as u64).map_err(|_| "Skin indirilemedi. Adres geçersiz ya da site yanıt vermiyor.".to_string())?;
+    validate_skin(&bytes)?;
+    add_skin(root, &name, "bağlantı", &bytes)
+}
+
+/// Ely.by skin sistemi: oyuncu adıyla doku. Çevrimdışı oyuncular arasında yaygındır.
+pub fn add_from_ely(root: &Path, player: &str) -> R<SkinInfo> {
+    validate_player_name(player).map_err(|e| e.to_string())?;
+    let bytes = get_bytes(&format!("https://skinsystem.ely.by/skins/{player}.png"), MAX_PNG as u64).map_err(|_| "Ely.by'da bu adla bir skin bulunamadı".to_string())?;
+    validate_skin(&bytes)?;
+    add_skin(root, player, &format!("Ely.by:{player}"), &bytes)
+}
+
 /// Mojang'dan oyuncu adıyla indirip kitaplığa ekler.
 pub fn add_from_username(root: &Path, player: &str) -> R<SkinInfo> {
     let bytes = fetch_by_username(player)?;
@@ -233,6 +299,31 @@ mod tests {
         assert!(add_skin_b64(&r, "x", "%%%").is_err());
         assert!(add_skin_b64(&r, "x", &STANDARD.encode(b"not png at all, just text....")).is_err());
         let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn trusted_links_only() {
+        let (u, n) = texture_url_from_link("https://namemc.com/skin/0123456789abcdef").unwrap();
+        assert_eq!((u.as_str(), n.as_str()), ("https://s.namemc.com/i/0123456789abcdef.png", "NameMC 012345"));
+        assert_eq!(texture_url_from_link("https://www.namemc.com/skin/0123456789ABCDEF?foo=1").unwrap().0, "https://s.namemc.com/i/0123456789abcdef.png");
+        assert_eq!(texture_url_from_link("https://s.namemc.com/i/0123456789abcdef.png").unwrap().0, "https://s.namemc.com/i/0123456789abcdef.png");
+        let h = "a".repeat(64);
+        assert_eq!(texture_url_from_link(&format!("https://textures.minecraft.net/texture/{h}")).unwrap().0, format!("https://textures.minecraft.net/texture/{h}"));
+        for bad in ["http://namemc.com/skin/0123456789abcdef", "https://evil.example/skin/0123456789abcdef", "https://namemc.com.evil.example/skin/0123456789abcdef",
+            "https://namemc.com/skin/zzzz", "https://textures.minecraft.net/texture/abc", "https://minecraftskins.com/skin/123/x", "javascript:alert(1)", "not a url", "https://namemc.com/profile/Notch"] {
+            assert!(texture_url_from_link(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn source_list_and_browse_allowlist() {
+        let l = trusted_sources();
+        assert!(l.iter().any(|s| s.id == "mojang" && s.direct == Some("oyuncu")));
+        assert!(l.iter().any(|s| s.id == "skindex" && s.direct.is_none()), "doğrulayamadığımız site doğrudan indirilmez");
+        assert!(browse_url_allowed("https://namemc.com/minecraft-skins"));
+        assert!(!browse_url_allowed("https://evil.example/"));
+        assert!(!browse_url_allowed("https://namemc.com/minecraft-skins?x=1"), "listedeki adresin aynısı olmalı");
+        assert!(!browse_url_allowed("file:///C:/Windows/System32/calc.exe"));
     }
 
     #[test]

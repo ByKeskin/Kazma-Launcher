@@ -18,7 +18,7 @@ pub struct Installed {
     pub plan: Plan,
 }
 
-fn fetch_version_json(root: &Path, id: &str, manifest: &mojang::VersionManifest) -> R<VersionJson> {
+pub(crate) fn fetch_version_json(root: &Path, id: &str, manifest: &mojang::VersionManifest) -> R<VersionJson> {
     let v = manifest.find(id).ok_or_else(|| format!("{id} sürümü Mojang listesinde yok"))?;
     if !game_url_trusted(&v.url) {
         return Err(format!("güvenilmeyen adres: {}", v.url));
@@ -161,7 +161,7 @@ fn find_java(dir: &Path, depth: u32) -> Option<PathBuf> {
     fs::read_dir(dir).ok()?.flatten().filter(|e| e.path().is_dir()).find_map(|e| find_java(&e.path(), depth - 1))
 }
 
-fn ensure_java(root: &Path, major: u32, env: &Env, custom: &Option<PathBuf>, rep: &dyn Reporter) -> R<PathBuf> {
+pub(crate) fn ensure_java(root: &Path, major: u32, env: &Env, custom: &Option<PathBuf>, rep: &dyn Reporter) -> R<PathBuf> {
     if let Some(p) = custom {
         return Ok(p.clone());
     }

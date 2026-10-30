@@ -11,6 +11,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 kazma-engine = { path = "../crates/kazma-engine" }
+kazma-core = { path = "../crates/kazma-core" }
 
 [features]
 # `cargo build --release --features custom-protocol` arayüz dosyalarını exe'ye gömer.

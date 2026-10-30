@@ -4,7 +4,7 @@
 use crate::install::{self, GameExit};
 use crate::net::*;
 use crate::report::Reporter;
-use crate::{modrinth, serverkit, skins, sync};
+use crate::{discord, importer, modrinth, serverkit, skins, sync};
 use kazma_core::instance::{self, InstanceSpec, LoaderSpec};
 use crate::ping;
 use kazma_core::invite::{self, Invite};
@@ -44,11 +44,24 @@ pub struct Config {
     /// Seçili skinin kimliği (skin kitaplığından).
     #[serde(default)]
     pub skin: Option<String>,
+    /// Başka launcher'dan alınan kimlik (UUID). Boşsa çevrimdışı UUID kullanılır.
+    #[serde(default)]
+    pub uuid: Option<String>,
+    /// Discord etkinliği (Kazma Launcher oynuyor) gösterilsin mi?
+    #[serde(default = "default_true")]
+    pub discord: bool,
+    /// Discord geliştirici portalındaki uygulama kimliği (Rich Presence için).
+    #[serde(default)]
+    pub discord_app_id: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { player: String::new(), ram: default_ram(), last_instance: None, skin: None }
+        Config { player: String::new(), ram: default_ram(), last_instance: None, skin: None, uuid: None, discord: true, discord_app_id: None }
     }
 }
 
@@ -63,9 +76,97 @@ pub fn save_config(root: &Path, c: &Config) -> R<()> {
 pub fn set_player(root: &Path, name: &str) -> R<Config> {
     account::validate_player_name(name).map_err(|e| e.to_string())?;
     let mut c = load_config(root);
+    if c.player != name {
+        c.uuid = None;
+    }
     c.player = name.to_string();
     save_config(root, &c)?;
     Ok(c)
+}
+
+/// Oyuncu adı ile birlikte başka launcher'dan bulunan kimliği (UUID) kullan; böylece sunucudaki envanter/ilerleme aynı oyuncuya bağlı kalır.
+pub fn set_identity(root: &Path, name: &str, uuid: &str) -> R<Config> {
+    account::validate_player_name(name).map_err(|e| e.to_string())?;
+    let u = importer::dash_uuid(uuid).ok_or("Geçersiz kimlik (UUID).")?;
+    let mut c = load_config(root);
+    c.player = name.to_string();
+    c.uuid = Some(u);
+    save_config(root, &c)?;
+    Ok(c)
+}
+
+fn custom_sources(root: &Path) -> Vec<String> {
+    fs::read_to_string(root.join("sources.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+pub fn scan_sources(root: &Path) -> Vec<importer::Source> {
+    importer::scan_all(&custom_sources(root))
+}
+
+pub fn scan_accounts(root: &Path) -> Vec<importer::FoundAccount> {
+    importer::scan_accounts(&custom_sources(root))
+}
+
+/// Kullanıcının seçtiği klasörü tarama listesine ekler (Minecraft oyun klasörü olmalı).
+pub fn add_source(root: &Path, path: &str) -> R<Vec<importer::Source>> {
+    let p = Path::new(path);
+    let cand = importer::Candidate { launcher: "Özel klasör".into(), dir: p.to_path_buf(), meta_dir: None };
+    if importer::scan(&cand).is_none() {
+        return Err("Bu klasörde Minecraft verisi (saves, mods veya versions) bulunamadı.".into());
+    }
+    let mut v = custom_sources(root);
+    if !v.iter().any(|x| x == path) {
+        v.push(path.to_string());
+    }
+    write_atomic(&root.join("sources.json"), serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?.as_bytes())?;
+    Ok(scan_sources(root))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportRequest {
+    pub source: String,
+    /// Kaynak profilinin sürüm kimliği; boşsa yalnızca bu instance'a eklenir (`instance` verilmeli).
+    pub profile: Option<usize>,
+    /// Var olan bir instance'a aktar.
+    pub instance: Option<String>,
+    pub name: Option<String>,
+    #[serde(default)]
+    pub worlds: Vec<String>,
+    #[serde(default)]
+    pub extras: importer::Extras,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportResult {
+    pub instance: InstanceInfo,
+    pub worlds: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+/// Başka launcher'ın klasöründen dünya/ayar/paketleri Kazma instance'ına KOPYALAR (kaynak değişmez).
+pub fn import_run(root: &Path, req: &ImportRequest, rep: &dyn Reporter) -> R<ImportResult> {
+    let sources = scan_sources(root);
+    let src = sources.iter().find(|s| s.id == req.source).ok_or("Kaynak bulunamadı; listeyi yenile.")?;
+    let src_dir = PathBuf::from(&src.path);
+    let info = match (&req.instance, req.profile) {
+        (Some(id), _) => read_info(root, id)?,
+        (None, Some(i)) => {
+            let p = src.profiles.get(i).ok_or("Profil bulunamadı.")?;
+            let (game, loader) = (p.game.clone().ok_or("Bu profilin sürümü tanınmadı; var olan bir instance seç.")?, p.loader.clone().unwrap_or_else(|| "vanilla".into()));
+            let lv = p.loader_version.clone().filter(|v| !v.is_empty());
+            let name = req.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| p.name.clone());
+            rep.stage("Instance oluşturuluyor");
+            match create_instance(root, &name, &game, &loader, lv) {
+                Ok(i) => i,
+                Err(e) => return Err(e),
+            }
+        }
+        _ => return Err("Hedef instance ya da kaynak profil seçilmeli.".into()),
+    };
+    let dst = instance_dir(root, &info.id)?;
+    let worlds = importer::import_worlds(&src_dir, &dst, &req.worlds, rep)?;
+    let notes = importer::import_extras(&src_dir, &dst, &req.extras, rep)?;
+    Ok(ImportResult { instance: info, worlds, notes })
 }
 
 /// Skin kitaplığından bir skini seç (None: seçimi kaldır).
@@ -84,6 +185,14 @@ fn apply_active_skin(root: &Path, instance_id: &str, cfg: &Config) {
     if let Some(id) = &cfg.skin {
         let _ = skins::apply_to_instance(root, &root.join("instances").join(instance_id), &cfg.player, id);
     }
+}
+
+/// Güvenilir kaynak listesindeki bir adresi varsayılan tarayıcıda açar.
+pub fn open_trusted_url(url: &str) -> R<()> {
+    if !skins::browse_url_allowed(url) {
+        return Err("Bu adres izinli listede değil".into());
+    }
+    open_in_file_manager(Path::new(url))
 }
 
 pub fn open_in_file_manager(path: &Path) -> R<()> {
@@ -272,7 +381,11 @@ fn account_from(cfg: &Config) -> R<Account> {
     if cfg.player.is_empty() {
         return Err("Önce oyuncu adını belirle (sol alttaki hesap kutusu).".into());
     }
-    Account::offline(&cfg.player).map_err(|e| e.to_string())
+    let mut a = Account::offline(&cfg.player).map_err(|e| e.to_string())?;
+    if let Some(u) = &cfg.uuid {
+        a.uuid = u.clone();
+    }
+    Ok(a)
 }
 
 pub fn launch_instance(root: &Path, id: &str, java: &Option<PathBuf>, rep: &dyn Reporter) -> R<GameExit> {
@@ -289,7 +402,44 @@ pub fn launch_instance(root: &Path, id: &str, java: &Option<PathBuf>, rep: &dyn 
     let opts = LaunchOptions { max_mb: cfg.ram, join_server: join, ..Default::default() };
     mark_played(root, id);
     apply_active_skin(root, id, &cfg);
-    install::launch_game(root, &spec, &inst, &env, &acct, &opts, java, rep)
+    let presence = presence_for(&cfg, &info);
+    if let Some((app, act)) = &presence {
+        let (app, act) = (app.clone(), act.clone());
+        std::thread::spawn(move || {
+            let _ = discord::update(&app, Some(&act));
+        });
+    }
+    let exit = install::launch_game(root, &spec, &inst, &env, &acct, &opts, java, rep);
+    if let Some((app, _)) = presence {
+        std::thread::spawn(move || discord::clear(&app));
+    }
+    exit
+}
+
+/// Discord etkinliği: açıksa ve uygulama kimliği varsa.
+pub fn presence_for(cfg: &Config, info: &InstanceInfo) -> Option<(String, discord::Activity)> {
+    let app = cfg.discord_app_id.clone().filter(|a| cfg.discord && discord::valid_app_id(a))?;
+    let loader = match info.loader.as_str() {
+        "vanilla" => "Vanilla".to_string(),
+        l => l[..1].to_uppercase() + &l[1..],
+    };
+    let state = match (&info.server_host, info.kind.as_str()) {
+        (Some(h), "server") => format!("Sunucu: {h} · {} {loader}", info.game),
+        _ => format!("Minecraft {} · {loader}", info.game),
+    };
+    Some((app, discord::Activity { details: "Kazma Launcher'da oynuyor".into(), state, start: now(), large_image: "kazma".into(), large_text: "Kazma Launcher".into() }))
+}
+
+pub fn set_discord(root: &Path, enabled: bool, app_id: &str) -> R<Config> {
+    let id = app_id.trim();
+    if !id.is_empty() && !discord::valid_app_id(id) {
+        return Err("Discord uygulama kimliği 15-22 haneli bir sayı olmalı.".into());
+    }
+    let mut c = load_config(root);
+    c.discord = enabled;
+    c.discord_app_id = if id.is_empty() { None } else { Some(id.to_string()) };
+    save_config(root, &c)?;
+    Ok(c)
 }
 
 // ---------- adresle bağlanma (Aternos vb.) ----------
@@ -363,6 +513,50 @@ pub fn connect_server(root: &Path, address: &str, game: &str, loader: &str, load
     let info = read_info(root, &spec.id)?;
     let exit = if launch { Some(launch_instance(root, &spec.id, java, rep)?) } else { None };
     Ok((info, exit))
+}
+
+// ---------- katılınan server'lar ----------
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ServerEntry {
+    pub instance: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub game: String,
+    pub loader: String,
+    pub last_played: Option<u64>,
+    pub managed: bool,
+}
+
+/// Katıldığımız (instance'ı olan) server'lar, en son oynananlar önce.
+pub fn list_servers(root: &Path) -> Vec<ServerEntry> {
+    let mut v: Vec<ServerEntry> = list_instances(root)
+        .into_iter()
+        .filter(|i| i.kind == "server")
+        .filter_map(|i| Some(ServerEntry { host: i.server_host.clone()?, port: i.server_port?, instance: i.id, name: i.name, game: i.game, loader: i.loader, last_played: i.last_played, managed: i.managed }))
+        .collect();
+    v.sort_by(|a, b| b.last_played.cmp(&a.last_played).then(a.name.cmp(&b.name)));
+    v
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ServerStatus {
+    pub online: bool,
+    pub players: String,
+    pub motd: String,
+    pub version: String,
+}
+
+/// Hızlı durum sorgusu (kısa zaman aşımı). Uyuyan/kapalı Aternos server'ı "çevrimdışı" sayılır.
+pub fn server_status(host: &str, port: u16) -> ServerStatus {
+    match ping::query(host, port, std::time::Duration::from_secs(3)) {
+        Ok(st) => {
+            let sleeping = st.protocol <= 0 || st.version_name.to_lowercase().contains("offline") || st.motd.to_lowercase().contains("offline");
+            ServerStatus { online: !sleeping, players: format!("{}/{}", st.players_online, st.players_max), motd: st.motd, version: st.version_name }
+        }
+        Err(_) => ServerStatus { online: false, players: String::new(), motd: String::new(), version: String::new() },
+    }
 }
 
 // ---------- server'a katılma ----------
@@ -572,6 +766,73 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn lists_only_server_instances_newest_first() {
+        let r = tmp("srvlist");
+        connect_server(&r, "a.example.com", "1.21.1", "vanilla", None, false, &None, &NullReporter).unwrap();
+        connect_server(&r, "b.example.com:25570", "1.20.1", "vanilla", None, false, &None, &NullReporter).unwrap();
+        create_instance(&r, "Kendi", "1.21.1", "vanilla", None).unwrap();
+        let id = list_servers(&r).iter().find(|s| s.host == "b.example.com").unwrap().instance.clone();
+        mark_played(&r, &id);
+        let l = list_servers(&r);
+        assert_eq!(l.len(), 2, "player instance listelenmez");
+        assert_eq!((l[0].host.as_str(), l[0].port), ("b.example.com", 25570));
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn discord_presence_needs_id_and_switch() {
+        let r = tmp("disc");
+        let inst = create_instance(&r, "Kule", "1.21.1", "vanilla", None).unwrap();
+        assert!(presence_for(&load_config(&r), &inst).is_none(), "kimlik yoksa etkinlik yok");
+        assert!(set_discord(&r, true, "abc").is_err());
+        let c = set_discord(&r, true, " 1234567890123456789 ").unwrap();
+        let (app, act) = presence_for(&c, &inst).unwrap();
+        assert_eq!((app.as_str(), act.state.as_str()), ("1234567890123456789", "Minecraft 1.21.1 · Vanilla"));
+        let c = set_discord(&r, false, "1234567890123456789").unwrap();
+        assert!(presence_for(&c, &inst).is_none());
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn dead_server_reports_offline() {
+        assert!(!server_status("127.0.0.1", 1).online);
+    }
+
+    #[test]
+    fn identity_overrides_uuid_and_resets_on_rename() {
+        let r = tmp("ident");
+        let c = set_identity(&r, "Notch", "069A79F444E94726A5BEFCA90E38AAF5").unwrap();
+        assert_eq!(c.uuid.as_deref(), Some("069a79f4-44e9-4726-a5be-fca90e38aaf5"));
+        assert_eq!(account_from(&load_config(&r)).unwrap().uuid, "069a79f4-44e9-4726-a5be-fca90e38aaf5");
+        assert!(set_identity(&r, "Notch", "xyz").is_err());
+        let c = set_player(&r, "Baska").unwrap();
+        assert_eq!(c.uuid, None, "ad değişince eski kimlik düşer");
+        assert_eq!(account_from(&c).unwrap().uuid, kazma_core::account::offline_uuid("Baska").unwrap());
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn import_into_existing_instance_copies_worlds() {
+        let (r, src) = (tmp("imp-root"), tmp("imp-src"));
+        let w = src.join("saves/Koy/region");
+        fs::create_dir_all(&w).unwrap();
+        fs::write(src.join("saves/Koy/level.dat"), b"x").unwrap();
+        fs::write(w.join("r.mca"), b"y").unwrap();
+        add_source(&r, src.to_str().unwrap()).unwrap();
+        let id = scan_sources(&r).iter().find(|s| s.path == src.to_string_lossy()).unwrap().id.clone();
+        let inst = create_instance(&r, "Hedef", "1.21.1", "vanilla", None).unwrap();
+        let req = ImportRequest { source: id, profile: None, instance: Some(inst.id.clone()), name: None, worlds: vec!["Koy".into()], extras: Default::default() };
+        let out = import_run(&r, &req, &NullReporter).unwrap();
+        assert_eq!(out.worlds, ["Koy"]);
+        assert!(instance_dir(&r, &inst.id).unwrap().join("saves/Koy/region/r.mca").is_file());
+        let bad = ImportRequest { source: "yok".into(), profile: None, instance: None, name: None, worlds: vec![], extras: Default::default() };
+        assert!(import_run(&r, &bad, &NullReporter).is_err());
+        assert!(add_source(&r, r.join("bos").to_str().unwrap()).is_err());
+        let _ = fs::remove_dir_all(&r);
+        let _ = fs::remove_dir_all(&src);
     }
 
     #[test]
