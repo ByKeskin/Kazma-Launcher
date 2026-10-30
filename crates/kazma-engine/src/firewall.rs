@@ -34,6 +34,7 @@ fn safe(s: &str) -> bool {
 /// Windows'ta bazı yollar `\\?\C:\...` biçiminde gelir; güvenlik duvarı bu öneki kabul etmez.
 pub fn plain_path(p: &Path) -> String {
     let s = p.to_string_lossy();
+    let s = s.replace('/', "\\");
     s.strip_prefix(r"\\?\UNC\").map(|r| format!(r"\\{r}")).or_else(|| s.strip_prefix(r"\\?\").map(String::from)).unwrap_or_else(|| s.to_string())
 }
 
@@ -104,6 +105,11 @@ pub fn build_script(id: &str, port: u16, kazma_exe: &Path, java_exe: &Path, need
 pub fn allow(id: &str, port: u16, java_exe: &Path) -> R<Status> {
     let st = status(id, port);
     let exe: PathBuf = std::env::current_exe().map_err(|e| e.to_string())?;
+    for (what, p) in [("Kazma", exe.as_path()), ("Java", java_exe)] {
+        if !p.is_file() {
+            return Err(format!("{what} dosyası bulunamadı: {}", plain_path(p)));
+        }
+    }
     let log = std::env::temp_dir().join("kazma-firewall.txt");
     let _ = std::fs::remove_file(&log);
     let script = build_script(id, port, &exe, java_exe, !st.kazma_ok, !st.server_ok, &log)?;
@@ -124,7 +130,7 @@ pub fn allow(id: &str, port: u16, java_exe: &Path) -> R<Status> {
     Err(if detail.is_empty() || detail == "ok" {
         "Kural eklenemedi ve ayrıntı alınamadı. Windows Güvenlik Duvarı hizmeti kapalı olabilir.".to_string()
     } else {
-        format!("Kural eklenemedi: {}", detail.chars().take(300).collect::<String>())
+        format!("Kural eklenemedi: {} (Kazma: {}, Java: {})", detail.chars().take(300).collect::<String>(), plain_path(&exe), plain_path(java_exe))
     })
 }
 
@@ -156,6 +162,7 @@ mod tests {
         assert_eq!(plain_path(Path::new(r"\\?\C:\Users\a\Kazma.exe")), r"C:\Users\a\Kazma.exe");
         assert_eq!(plain_path(Path::new(r"\\?\UNC\srv\share\k.exe")), r"\\srv\share\k.exe");
         assert_eq!(plain_path(Path::new(r"C:\a\b.exe")), r"C:\a\b.exe");
+        assert_eq!(plain_path(Path::new(r"C:\Users\a\.kazma\runtime/java-21/bin\java.exe")), r"C:\Users\a\.kazma\runtime\java-21\bin\java.exe", "karışık ayraçlar düzeltilir");
         let c = build_script("x", 25565, Path::new(r"\\?\C:\k\Kazma.exe"), Path::new(r"\\?\C:\j\java.exe"), true, true, Path::new(r"\\?\C:\t\l.txt")).unwrap();
         assert!(!c.contains(r"\\?\"), "{c}");
     }
