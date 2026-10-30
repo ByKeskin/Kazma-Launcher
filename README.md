@@ -164,3 +164,9 @@ Hesap penceresinden Discord uygulama kimliği girilirse oyun açıkken "Kazma La
 - **Modlar/Eklentiler sekmesi:** Mod Gezgini gibi arama, kategori ve kartlar; yalnızca server'da çalışan dosyalar listelenir, kurulu olanlar altta görünür ve kaldırılabilir.
 - **Davet sekmesi:** dış adres, yerel ağ adresi (kopyala), isteğe bağlı "Dış IP'mi bul" ve mod eşitlemeli davet kodu.
 - **UPnP:** tüm yerel ağ arayüzlerinden (VPN/WSL/sanal bağdaştırıcılar dahil) ve birkaç arama türüyle router aranır.
+
+## Windows Güvenlik Duvarı
+Server sayfasında izin yoksa bir uyarı çıkar. "Güvenlik duvarında izin ver" düğmesi Windows'un yönetici onayını açar ve iki kural ekler: Kazma için UDP (router'ı bulmak) ve server'ın Java'sı için TCP (oyuncu bağlantısı). Başka bir ayara dokunulmaz.
+
+## Silme
+Katıldığım server'lar ve kendi server'larım kartlarında **Sil** düğmesi vardır (iki kez basarak onaylanır). Katılınan server'ı silmek onun instance'ını ve modlarını kaldırır; kendi server'ını silmek dünyasını da siler.

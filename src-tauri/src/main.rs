@@ -542,6 +542,26 @@ async fn host_find_public(state: State<'_, AppState>, id: String) -> CmdResult<s
     .map_err(|e| e.to_string())?
 }
 
+/// Windows Güvenlik Duvarı izin durumu.
+#[tauri::command]
+async fn host_firewall(state: State<'_, AppState>, id: String) -> CmdResult<kazma_engine::firewall::Status> {
+    let spec = serverhost::read_spec(&state.root, &id)?;
+    tauri::async_runtime::spawn_blocking(move || kazma_engine::firewall::status(&spec.id, spec.port)).await.map_err(|e| e.to_string())
+}
+
+/// Güvenlik duvarında Kazma (UDP) ve server'ın Java'sı (TCP) için izin ekler; Windows yönetici onayı sorar.
+#[tauri::command]
+async fn host_firewall_allow(state: State<'_, AppState>, id: String) -> CmdResult<kazma_engine::firewall::Status> {
+    let root = state.root.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let spec = serverhost::read_spec(&root, &id)?;
+        let java = serverhost::java_path(&root, &id)?;
+        kazma_engine::firewall::allow(&spec.id, spec.port, &java)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Otomatik port yönlendirmeyi aç/kapat (açıksa bir sonraki başlatmada uygulanır; çalışıyorsa hemen açılır).
 #[tauri::command]
 async fn host_upnp(state: State<'_, AppState>, id: String, on: bool) -> CmdResult<serverhost::ServerSpec> {
@@ -643,6 +663,8 @@ fn main() {
             host_remove_content,
             host_connect_info,
             host_find_public,
+            host_firewall,
+            host_firewall_allow,
             host_upnp,
             host_set_address,
             tunnel_start,

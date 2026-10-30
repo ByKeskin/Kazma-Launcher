@@ -32,14 +32,15 @@
         return '<article class="card srv"><div class="top"><span data-sk="' + esc(key) + '">' + d + '</span><b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">' + esc(s.name) + '</b></div>' +
           '<div class="hint mono" style="word-break:break-all">' + esc(s.host + (s.port !== 25565 ? ':' + s.port : '')) + '</div>' +
           '<div class="hint" data-si="' + esc(key) + '">' + (c && c.online ? esc(c.players + ' oyuncu · ' + c.version) : (c ? 'Çevrimdışı ya da uyuyor' : 'Kontrol ediliyor...')) + '</div>' +
-          '<div style="display:flex;gap:8px;flex-wrap:wrap"><span class="pill mute">' + esc(s.game) + '</span><span class="pill mute">' + esc(L.loaderName(s.loader)) + '</span></div>' + btn + '</article>';
+          '<div style="display:flex;gap:8px;flex-wrap:wrap"><span class="pill mute">' + esc(s.game) + '</span><span class="pill mute">' + esc(L.loaderName(s.loader)) + '</span></div>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap">' + btn + '<button class="btn sm danger" data-sdel="' + esc(s.instance) + '">Sil</button></div></article>';
       }).join('');
       var hcards = hosts.map(function (h) {
         var st = STATE[h.state] || STATE.stopped;
         return '<article class="card srv"><div class="top">' + dot(st[0], st[1]) + '<b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">' + esc(h.name) + '</b><span class="pill mute">' + esc(h.mode === 'local' ? 'Bu bilgisayar' : 'Ayrı makine') + '</span></div>' +
           '<div style="display:flex;gap:8px;flex-wrap:wrap"><span class="pill mute">' + esc(KIND[h.kind] || h.kind) + '</span><span class="pill mute">' + esc(h.game) + '</span><span class="pill mute">Port ' + h.port + '</span></div>' +
           '<div class="hint mono">' + esc(addrOf(h) || 'Dış adres henüz yok') + '</div>' +
-          '<button class="btn primary sm" data-hm="' + esc(h.id) + '">Yönet</button></article>';
+          '<div style="display:flex;gap:8px"><button class="btn primary sm" data-hm="' + esc(h.id) + '">Yönet</button><button class="btn sm danger" data-hdel="' + esc(h.id) + '"' + (h.state !== 'stopped' ? ' disabled title="Önce server\'ı kapat"' : '') + '>Sil</button></div></article>';
       }).join('');
       view.innerHTML =
         '<div class="ph"><div><h1>Serverlar</h1><p>Katıldığın server\'lar ve kendi kurduğun server\'lar. Yeşil nokta çevrimiçi, kırmızı çevrimdışı demek.</p></div><button class="btn primary" id="hNew">' + kz.ic('plus', 18) + 'Server kur</button></div>' +
@@ -131,6 +132,19 @@
         '<div id="hBody" style="display:flex;flex-direction:column;gap:14px;margin-top:14px"></div>';
       $('#hBack').addEventListener('click', function () { sel = null; load(); });
       drawTab(h);
+      if (h.mode === 'local') {
+        inv('host_firewall', { id: h.id }).then(function (f) {
+          if (!f.supported || (f.kazma_ok && f.server_ok) || sel !== h.id) return;
+          var box = document.createElement('div'); box.className = 'card';
+          box.innerHTML = '<div class="callout">' + kz.ic('shield', 20) + '<div><b>Windows Güvenlik Duvarı izni yok.</b> Arkadaşlarının bağlanabilmesi ve Kazma\'nın router\'ı bulabilmesi için izin gerekir. Düğmeye basınca Windows yönetici onayı sorar; yalnızca Kazma ve bu server\'ın Java\'sı için kural eklenir.</div></div>' +
+            '<div style="margin-top:10px"><button class="btn primary" id="hFw">' + kz.ic('shield', 16) + 'Güvenlik duvarında izin ver</button> <span class="err" id="hFwErr"></span></div>';
+          var tabs = $('.tabs', view); if (tabs) tabs.parentNode.insertBefore(box, tabs);
+          $('#hFw').addEventListener('click', function () {
+            var b = this; b.disabled = true; $('#hFwErr').textContent = '';
+            inv('host_firewall_allow', { id: h.id }).then(function () { box.remove(); toast('Güvenlik duvarı izni verildi'); }).catch(function (e) { b.disabled = false; $('#hFwErr').textContent = errText(e); });
+          });
+        }).catch(function () { });
+      }
     }
     function actErr(e) { toast(errText(e)); }
     function drawTab(h) {
@@ -182,7 +196,7 @@
           inv('host_set_props', { id: h.id, updates: u }).then(function () { toast('Ayarlar kaydedildi'); }).catch(function (e) { $('#hpErr').textContent = errText(e); });
         });
         $('#hDel').addEventListener('click', function () {
-          if (!confirm('"' + h.name + '" server\'ı ve dünyası silinsin mi? Bu geri alınamaz.')) return;
+          if (!armed(this, 'Emin misin? Tekrar bas')) return;
           inv('host_delete', { id: h.id }).then(function () { sel = null; return load(); }).catch(actErr);
         });
       }).catch(function (e) { b.innerHTML = '<div class="card hint">Ayar dosyası henüz yok. Server\'ı bir kez başlat.</div>'; });
@@ -289,7 +303,17 @@
     }
 
     /* ---------- olaylar ---------- */
+    function armed(btn, label) {
+      if (btn.dataset.armed) return true;
+      btn.dataset.armed = '1'; btn.dataset.old = btn.textContent; btn.textContent = label;
+      setTimeout(function () { if (btn.isConnected && btn.dataset.armed) { btn.textContent = btn.dataset.old; delete btn.dataset.armed; } }, 4000);
+      return false;
+    }
     document.addEventListener('click', function (e) {
+      var sd = e.target.closest('[data-sdel]');
+      if (sd && view.contains(sd)) { if (armed(sd, 'Emin misin? Tekrar bas')) { sd.disabled = true; inv('delete_instance', { id: sd.dataset.sdel }).then(function () { toast('Server kaydı ve dosyaları silindi'); return load(); }).catch(function (er) { sd.disabled = false; actErr(er); }); } return; }
+      var hd = e.target.closest('[data-hdel]');
+      if (hd && view.contains(hd)) { if (armed(hd, 'Emin misin? Tekrar bas')) { hd.disabled = true; inv('host_delete', { id: hd.dataset.hdel }).then(function () { toast('Server silindi'); return load(); }).catch(function (er) { hd.disabled = false; actErr(er); }); } return; }
       var hm = e.target.closest('[data-hm]'); if (hm) { sel = hm.dataset.hm; tab = 'console'; draw(); return; }
       var tg = e.target.closest('[data-ht-go]'); if (tg && sel) { tab = tg.dataset.htGo; draw(); return; }
       var t = e.target.closest('[data-ht]'); if (t && view.contains(t)) { tab = t.dataset.ht; var h = hostById(sel); if (h) { $$('[data-ht]').forEach(function (x) { x.setAttribute('aria-selected', x === t); }); drawTab(h); } return; }

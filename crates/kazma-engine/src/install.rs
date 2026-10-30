@@ -149,7 +149,7 @@ pub fn ensure_installed(root: &Path, spec: &InstanceSpec, env: &Env, java: &Opti
     Ok(Installed { resolved, plan })
 }
 
-fn find_java(dir: &Path, depth: u32) -> Option<PathBuf> {
+pub(crate) fn find_java(dir: &Path, depth: u32) -> Option<PathBuf> {
     let exe = if cfg!(windows) { "java.exe" } else { "java" };
     let direct = dir.join("bin").join(exe);
     if direct.is_file() {

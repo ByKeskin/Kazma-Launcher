@@ -494,6 +494,13 @@ pub fn remove_content(root: &Path, id: &str, file: &str) -> R<()> {
     fs::remove_file(dir.join(file)).map_err(|e| format!("Silinemedi: {e}"))
 }
 
+/// Server'ın kullandığı (kurulmuş) Java'nın yolu.
+pub fn java_path(root: &Path, id: &str) -> R<PathBuf> {
+    let spec = read_spec(root, id)?;
+    let major = if spec.java_major > 0 { spec.java_major } else { java_major_guess(&spec.game) };
+    crate::install::find_java(&root.join(kazma_core::java::runtime_dir(major)), 3).ok_or_else(|| "Server'ın Java'sı bulunamadı; server'ı bir kez başlat.".to_string())
+}
+
 /// Bu bilgisayarın yerel ağ adresi (paket göndermeden, yönlendirme tablosundan).
 pub fn lan_ip() -> Option<String> {
     let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
