@@ -361,6 +361,11 @@ async fn server_status(host: String, port: u16) -> CmdResult<app::ServerStatus> 
 }
 
 #[tauri::command]
+fn set_game_theme(state: State<'_, AppState>, enabled: bool, variant: String) -> CmdResult<app::Config> {
+    app::set_game_theme(&state.root, enabled, &variant)
+}
+
+#[tauri::command]
 fn set_discord(state: State<'_, AppState>, enabled: bool, app_id: String) -> CmdResult<app::Config> {
     app::set_discord(&state.root, enabled, &app_id)
 }
@@ -670,7 +675,8 @@ fn main() {
             tunnel_start,
             tunnel_stop,
             tunnel_open_claim,
-            set_discord
+            set_discord,
+            set_game_theme
         ])
         .build(tauri::generate_context!())
         .expect("Kazma başlatılamadı")

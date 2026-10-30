@@ -170,3 +170,20 @@ Server sayfasında izin yoksa bir uyarı çıkar. "Güvenlik duvarında izin ver
 
 ## Silme
 Katıldığım server'lar ve kendi server'larım kartlarında **Sil** düğmesi vardır (iki kez basarak onaylanır). Katılınan server'ı silmek onun instance'ını ve modlarını kaldırır; kendi server'ını silmek dünyasını da siler.
+
+## Oyun teması ve yükleme ekranı
+- **Menü teması:** oyun açılırken instance'a `KazmaTheme.zip` kaynak paketi yazılır ve `options.txt` içinde etkinleştirilir (Obsidian ya da Terminal rengiyle başlık ekranı panoraması). Paket sürümün kendi `pack.mcmeta` bilgisini kullanır. 1.14+ sürümlerde çalışır; hesap penceresinden kapatılabilir, kapatınca paket kaldırılır. Diğer ayarlara dokunulmaz.
+- **Yükleme ekranı:** launcher'daki hazırlanma penceresinde ilerleme çubuğunun üstünde Kazma'ya özgü blok yaratıklar yürür; tıklayınca patlar, yenisi doğar. "Hareketi azalt" ayarı açıksa gösterilmez.
+- **Yapılamayanlar:** oyunun kendi pencere çerçevesine, yükleme çubuğuna ve Mojang logosuna müdahale için her sürüm/yükleyici için ayrı bir mod gerekir; bu pakette yok.
+
+## Dış IP
+"Dış IP'mi bul" iki ayrı servise sorar, farklı IP dönerse uyarır. Modem panelindeki IP farklıysa internet sağlayıcı ortak IP (CGNAT) kullanıyordur ya da VPN açıktır; elle IP yazılabilir, CGNAT'ta tünel gerekir.
+
+## Kazma Tema modu (deneysel, Fabric 26.x)
+`mod/` klasöründe Fabric için küçük bir istemci modu var; launcher'ın yapamadığı kısımları oyunun içinde çizer:
+- Oyun açılırken Mojang ekranının üstüne Kazma temalı yükleme sahnesi (logo, ilerleme çubuğu, yürüyen yaratık).
+- Menülerin üstünde ince bir Kazma şeridi; içinde yürüyen yaratık, tıklayınca patlar.
+- Pencere simgesi ve başlığı "Kazma Launcher".
+
+Derleme GitHub Actions'ta (`Kazma Tema modu` iş akışı) yapılır; çıkan `kazma-theme-*.jar` dosyasını instance'ın `mods` klasörüne at. Mod hata verirse kendini susturur, oyunu çökertmez. Renk, launcher'ın yazdığı `config/kazma-theme.txt` dosyasından okunur. Çizim mantığı oyundan bağımsız test edilir: `mod/tools/FxCheck.java`.
+Not: Minecraft'ın pencere çerçevesi (başlık çubuğu) Windows'a aittir; mob şeridi bu yüzden pencerenin içinde, menülerin üstündedir.

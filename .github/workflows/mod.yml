@@ -1,0 +1,32 @@
+name: Kazma Tema modu
+on:
+  push:
+    branches: [main]
+    paths: ['mod/**', '.github/workflows/mod.yml']
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Çizim mantığı testi (oyun gerektirmez)
+        working-directory: mod
+        run: |
+          javac -d /tmp/fx src/main/java/app/kazma/theme/fx/*.java tools/FxCheck.java
+          java -cp /tmp/fx FxCheck
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+      - name: Modu derle
+        working-directory: mod
+        run: gradle build --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kazma-theme-mod
+          path: |
+            mod/build/libs/kazma-theme-*.jar
+            !mod/build/libs/*-sources.jar

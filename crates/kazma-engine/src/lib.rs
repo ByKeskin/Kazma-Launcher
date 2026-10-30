@@ -2,6 +2,7 @@
 pub mod app;
 pub mod discord;
 pub mod firewall;
+pub mod gametheme;
 pub mod importer;
 pub mod install;
 pub mod loaders;

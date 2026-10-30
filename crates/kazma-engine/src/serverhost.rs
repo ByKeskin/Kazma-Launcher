@@ -511,11 +511,19 @@ pub fn lan_ip() -> Option<String> {
     }
 }
 
-/// Dış IP'yi öğrenir (yalnızca kullanıcı isteyince; api.ipify.org'a tek bir istek).
+/// Dış IP'yi öğrenir (yalnızca kullanıcı isteyince). İki ayrı servise sorulur; farklı IP dönerse (VPN/proxy/çift çıkış) hata verilir.
 pub fn public_ip() -> R<String> {
-    let t = get_text("https://api.ipify.org", 64)?;
-    let t = t.trim();
-    t.parse::<std::net::Ipv4Addr>().map(|a| a.to_string()).map_err(|_| "Dış IP öğrenilemedi.".to_string())
+    fn one(url: &str) -> R<String> {
+        let t = get_text(url, 64)?;
+        t.trim().parse::<std::net::Ipv4Addr>().map(|a| a.to_string()).map_err(|_| "Dış IP öğrenilemedi.".to_string())
+    }
+    let (a, b) = (one("https://api.ipify.org"), one("https://ipv4.icanhazip.com"));
+    match (a, b) {
+        (Ok(x), Ok(y)) if x == y => Ok(x),
+        (Ok(x), Ok(y)) => Err(format!("İki servis farklı IP bildirdi ({x} ve {y}). VPN, proxy ya da çift çıkışlı bir bağlantı kullanıyor olabilirsin; modem panelindeki IP'yi elle yaz.")),
+        (Ok(x), Err(_)) | (Err(_), Ok(x)) => Ok(x),
+        (Err(e), Err(_)) => Err(e),
+    }
 }
 
 pub fn install_content(root: &Path, id: &str, project: &str, rep: &dyn Reporter) -> R<Vec<String>> {

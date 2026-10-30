@@ -254,7 +254,9 @@
         var modded = ['fabric', 'forge', 'neoforge'].indexOf(h.kind) >= 0;
         b.innerHTML = '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Bağlantı adresi</h2>' +
           (rows.length ? rows.map(function (r, i) { return '<div class="srow"><div><b>' + esc(r[0]) + '</b><small class="mono">' + esc(r[1]) + '</small></div><button class="btn sm" data-cp="' + i + '">' + kz.ic('copy', 14) + 'Kopyala</button></div>'; }).join('') : '<p class="hint">Henüz adres yok.</p>') +
-          (ci.public ? '' : '<div class="callout">' + kz.ic('shield', 20) + '<div>İnternetten bağlanılacak adres henüz bilinmiyor. Server başlayınca port otomatik açılırsa burada görünür; olmazsa <b>Bağlantı</b> sekmesinden tüneli kullan ya da router\'da portu elle aç, sonra aşağıdan dış IP\'ni bul.</div></div><div><button class="btn" id="hFind">' + kz.ic('globe', 16) + 'Dış IP\'mi bul</button> <span class="hint">(api.ipify.org\'a tek bir istek gönderir)</span></div>') +
+          (ci.public ? '' : '<div class="callout">' + kz.ic('shield', 20) + '<div>İnternetten bağlanılacak adres henüz bilinmiyor. Server başlayınca port otomatik açılırsa burada görünür; olmazsa <b>Bağlantı</b> sekmesinden tüneli kullan ya da router\'da portu elle aç, sonra aşağıdan dış IP\'ni bul.</div></div><div><button class="btn" id="hFind">' + kz.ic('globe', 16) + 'Dış IP\'mi bul</button> <span class="hint">(iki ayrı servise tek istek gönderir)</span></div>' +
+            '<div class="field"><label for="hManIp">Ya da modem panelindeki WAN/İnternet IP\'sini elle yaz</label><div class="joinbar"><input id="hManIp" class="in mono" placeholder="örn. 85.100.20.4" autocomplete="off" inputmode="decimal"><button class="btn" id="hManGo">Kaydet</button></div></div>' +
+            '<div class="callout">' + kz.ic('shield', 20) + '<div>Modem panelindeki IP, bulunan IP\'den <b>farklıysa</b> internet sağlayıcın ortak IP (CGNAT) kullanıyor demektir; o durumda router\'da port açmak işe yaramaz, <b>Bağlantı</b> sekmesindeki tüneli kullan. VPN açıksa da farklı IP görünür.</div></div>') +
           '<div class="err" id="hiErr"></div></div>' +
           '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Davet</h2>' +
           (modded ? '<p class="hint">Mod eşitlemeli davet kodu: oyuncular kodu <b>Server\'a Katıl</b> sayfasına yapıştırınca server\'daki modlar otomatik iner ve doğru sürümle bağlanılır.</p>' +
@@ -263,6 +265,12 @@
             : '<p class="hint">Bu server türünde oyuncuya mod kurulmaz; arkadaşların <b>Server\'a Katıl → Sunucu adresi</b> sekmesine yukarıdaki adresi yazması yeterli. Sürümü ' + esc(h.game) + '.</p>') + '</div>';
         $$('[data-cp]', b).forEach(function (x) { x.addEventListener('click', function () { copyText(rows[+x.dataset.cp][1]); }); });
         var f = $('#hFind'); if (f) f.addEventListener('click', function () { f.disabled = true; inv('host_find_public', { id: h.id }).then(function (s) { h.public_address = s.public_address; tabInvite(h, b); }).catch(function (e) { f.disabled = false; $('#hiErr').textContent = errText(e); }); });
+        var mg = $('#hManGo');
+        if (mg) mg.addEventListener('click', function () {
+          var ip = $('#hManIp').value.trim();
+          if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) { $('#hiErr').textContent = 'Geçerli bir IPv4 adresi yaz (örn. 85.100.20.4).'; return; }
+          inv('host_set_address', { id: h.id, address: ip + ':' + h.port }).then(function (s) { h.public_address = s.public_address; toast('Adres kaydedildi'); tabInvite(h, b); }).catch(function (e) { $('#hiErr').textContent = errText(e); });
+        });
         var sel2 = $('#hiAddr');
         if (sel2) {
           var own = $('#hiOwn'), tog = function () { own.hidden = sel2.value !== ''; }; sel2.addEventListener('change', tog); tog();
@@ -354,11 +362,17 @@
         '<div class="field" id="dcBox"><label for="dcId">Discord etkinliği (Kazma Launcher oynuyor)</label>' +
         '<label class="chk"><input type="checkbox" id="dcOn"> Oynarken Discord\'da göster</label>' +
         '<input id="dcId" class="in mono" placeholder="Discord uygulama kimliği (sayı)" autocomplete="off" inputmode="numeric">' +
+        '<label class="chk"><input type="checkbox" id="gtOn"> Oyun menüsünü Kazma temasıyla boya (başlık ekranı arka planı, 1.14+)</label>' +
         '<p class="hint">Discord Developer Portal\'da bir uygulama oluşturup Application ID\'sini yaz; "Rich Presence → Art Assets" bölümüne logoyu <b>kazma</b> adıyla yükle. Boş bırakırsan etkinlik gösterilmez.</p><div class="err" id="dcErr"></div></div>');
-      var fill = function () { var c = L.cfg(); $('#dcOn').checked = c.discord !== false; $('#dcId').value = c.discord_app_id || ''; $('#dcErr').textContent = ''; };
+      var fill = function () { var c = L.cfg(); $('#gtOn').checked = c.game_theme !== false; $('#dcOn').checked = c.discord !== false; $('#dcId').value = c.discord_app_id || ''; $('#dcErr').textContent = ''; };
       var save = function () { inv('set_discord', { enabled: $('#dcOn').checked, appId: $('#dcId').value.trim() }).then(function (c) { L.setCfg(c); $('#dcErr').textContent = ''; toast('Discord ayarı kaydedildi'); }).catch(function (e) { $('#dcErr').textContent = errText(e); }); };
+      var gt = function () { var v = (document.body.dataset.skin === 'terminal') ? 'terminal' : 'obsidian'; return inv('set_game_theme', { enabled: $('#gtOn').checked, variant: v }).then(function (c) { L.setCfg(c); }).catch(function (e) { $('#dcErr').textContent = errText(e); }); };
+      $('#gtOn').addEventListener('change', gt);
+      $$('.skins button').forEach(function (b) { b.addEventListener('click', function () { setTimeout(gt, 0); }); });
+      L.setGt = gt;
       $('#dcOn').addEventListener('change', save); $('#dcId').addEventListener('change', save);
       $('#acctBtn').addEventListener('click', fill);
+      setTimeout(function () { fill(); gt(); }, 400);
     }
   }
   if (window.__kz && window.__kz.live) boot(); else document.addEventListener('kazma-live', boot);

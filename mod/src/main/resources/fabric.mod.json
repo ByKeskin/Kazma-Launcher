@@ -1,0 +1,23 @@
+{
+	"schemaVersion": 1,
+	"id": "kazma_theme",
+	"version": "${version}",
+	"name": "Kazma Tema",
+	"description": "Kazma Launcher teması: menülerde yürüyen yaratıklı şerit, tema renkli yükleme ekranı, pencere simgesi. Yalnızca istemci.",
+	"authors": ["Kazma"],
+	"license": "MIT",
+	"icon": "assets/kazma_theme/mod_icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": ["app.kazma.theme.KazmaTheme"]
+	},
+	"mixins": [
+		{ "config": "kazma_theme.mixins.json", "environment": "client" }
+	],
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": ">=26.1",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

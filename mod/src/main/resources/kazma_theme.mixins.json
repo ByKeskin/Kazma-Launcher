@@ -1,0 +1,13 @@
+{
+	"required": true,
+	"minVersion": "0.8",
+	"package": "app.kazma.theme.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"client": [
+		"ScreenMixin",
+		"LoadingOverlayMixin"
+	],
+	"injectors": {
+		"defaultRequire": 0
+	}
+}

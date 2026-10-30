@@ -4,7 +4,7 @@
 use crate::install::{self, GameExit};
 use crate::net::*;
 use crate::report::Reporter;
-use crate::{discord, importer, modrinth, serverkit, skins, sync};
+use crate::{discord, gametheme, importer, modrinth, serverkit, skins, sync};
 use kazma_core::instance::{self, InstanceSpec, LoaderSpec};
 use crate::ping;
 use kazma_core::invite::{self, Invite};
@@ -53,6 +53,16 @@ pub struct Config {
     /// Discord geliştirici portalındaki uygulama kimliği (Rich Presence için).
     #[serde(default)]
     pub discord_app_id: Option<String>,
+    /// Oyun menüsüne Kazma temasını (panorama) uygula.
+    #[serde(default = "default_true")]
+    pub game_theme: bool,
+    /// "obsidian" ya da "terminal" (launcher teması ile aynı).
+    #[serde(default = "default_variant")]
+    pub theme_variant: String,
+}
+
+fn default_variant() -> String {
+    "obsidian".into()
 }
 
 fn default_true() -> bool {
@@ -61,7 +71,7 @@ fn default_true() -> bool {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { player: String::new(), ram: default_ram(), last_instance: None, skin: None, uuid: None, discord: true, discord_app_id: None }
+        Config { player: String::new(), ram: default_ram(), last_instance: None, skin: None, uuid: None, discord: true, discord_app_id: None, game_theme: true, theme_variant: default_variant() }
     }
 }
 
@@ -402,6 +412,11 @@ pub fn launch_instance(root: &Path, id: &str, java: &Option<PathBuf>, rep: &dyn 
     let opts = LaunchOptions { max_mb: cfg.ram, join_server: join, ..Default::default() };
     mark_played(root, id);
     apply_active_skin(root, id, &cfg);
+    // Menü teması en iyi çabayla uygulanır; başarısız olursa oyun yine açılır.
+    let jar = root.join(format!("versions/{0}/{0}.jar", inst.resolved.jar_id));
+    if let Err(e) = gametheme::apply(&root.join("instances").join(&info.id), &info.game, &jar, &cfg.theme_variant, cfg.game_theme) {
+        rep.stage(&format!("Menü teması uygulanamadı: {e}"));
+    }
     let presence = presence_for(&cfg, &info);
     if let Some((app, act)) = &presence {
         let (app, act) = (app.clone(), act.clone());
@@ -428,6 +443,17 @@ pub fn presence_for(cfg: &Config, info: &InstanceInfo) -> Option<(String, discor
         _ => format!("Minecraft {} · {loader}", info.game),
     };
     Some((app, discord::Activity { details: "Kazma Launcher'da oynuyor".into(), state, start: now(), large_image: "kazma".into(), large_text: "Kazma Launcher".into() }))
+}
+
+pub fn set_game_theme(root: &Path, enabled: bool, variant: &str) -> R<Config> {
+    if !["obsidian", "terminal"].contains(&variant) {
+        return Err("Bilinmeyen tema.".into());
+    }
+    let mut c = load_config(root);
+    c.game_theme = enabled;
+    c.theme_variant = variant.to_string();
+    save_config(root, &c)?;
+    Ok(c)
 }
 
 pub fn set_discord(root: &Path, enabled: bool, app_id: &str) -> R<Config> {
