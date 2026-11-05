@@ -37,7 +37,7 @@
   /* ---------- hesap ---------- */
   function renderAccount() {
     $('#acctName').textContent = cfg.player || 'Oyuncu adı seç';
-    $('#acctType').textContent = 'Çevrimdışı hesap';
+    $('#acctType').textContent = cfg.account === 'ms' ? 'Microsoft hesabı' : 'Çevrimdışı hesap';
     var cv = $('#head'), x = cv.getContext('2d');
     var g = ['HHHHHHHH', 'HHHHHHHH', 'HSSSSSSH', 'SSSSSSSS', 'SWESSEWS', 'SSSSSSSS', 'SSSMMSSS', 'SSSSSSSS'];
     var m = { H: '#7A4B1E', S: '#C99672', W: '#FFFFFF', E: '#3A4FD6', M: '#A0614A' };
@@ -52,10 +52,51 @@
     '<div id="lg-off" style="display:flex;flex-direction:column;gap:10px"><div class="field"><label for="offName">Oyuncu adı</label><input id="offName" class="in" maxlength="16" placeholder="3-16 karakter, harf, rakam, _" autocomplete="off"></div>' +
     '<div class="err" id="offErr" aria-live="polite"></div><p class="hint">Çevrimdışı hesapla tek kişilik dünyalara ve karma girişi açık server\'lara girilir.</p>' +
     '<div class="field"><label>Diğer launcher\'lardan al</label><div id="foundAccts" style="display:flex;flex-direction:column;gap:6px"><span class="hint">Taranıyor...</span></div><p class="hint">Aynı ad ve kimlik kullanılır; server\'daki envanterin ve ilerlemen aynı oyuncuya bağlı kalır.</p></div></div>' +
-    '<div id="lg-ms" style="display:none;flex-direction:column;gap:10px"><p>Microsoft ile giriş henüz etkin değil. Minecraft\'ın giriş servisi yeni uygulamalar için Mojang onayı istiyor ve başvurumuz beklemede.</p><p class="hint">Onay gelince bu sekmeden giriş yapılacak. O zamana kadar çevrimdışı hesapla oynayabilirsin.</p></div>' +
+    '<div id="lg-ms" style="display:none;flex-direction:column;gap:10px"><div id="msBody"><span class="hint">Kontrol ediliyor...</span></div></div>' +
     '<div style="display:flex;gap:10px;justify-content:flex-end"><button class="btn" id="loginCancel">Vazgeç</button><button class="btn primary" id="loginOk">Kaydet</button></div></div></div>';
   var lmode = 'off';
-  function openLogin() { $('#offName').value = cfg.player; $('#offErr').textContent = ''; $('#loginModal').hidden = false; $('#offName').focus(); loadFoundAccounts(); }
+  function openLogin() {
+    $('#offName').value = cfg.player; $('#offErr').textContent = ''; $('#loginModal').hidden = false; loadFoundAccounts();
+    var b = $('#loginSeg [data-l="' + (cfg.account === 'ms' ? 'ms' : 'off') + '"]'); b.click(); if (cfg.account !== 'ms') $('#offName').focus();
+  }
+  /* Microsoft girişi: cihaz kodu. Şifreyi Kazma görmez. */
+  function msCopy(t) { (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { toast('Kod kopyalandı'); }).catch(function () { toast('Kopyalanamadı, elle yaz'); }); }
+  function renderMs() {
+    var b = $('#msBody'); b.innerHTML = '<span class="hint">Kontrol ediliyor...</span>';
+    inv('ms_status').then(function (st) {
+      if (st.signed_in) {
+        b.innerHTML = '<div style="display:flex;flex-direction:column;gap:10px"><p>Bağlı hesap: <b>' + esc(cfg.player) + '</b></p><p class="hint">Gerçek Microsoft hesabınla oynarsın: premium server\'lara girebilirsin ve skinin oyunda otomatik görünür. Oturum bu bilgisayarda Windows tarafından şifrelenmiş olarak saklanır.</p><div><button class="btn" id="msOut">Çıkış yap</button></div><div class="err" id="msErr"></div></div>';
+        $('#msOut').addEventListener('click', function () { inv('ms_logout').then(function (c) { cfg = c; renderAccount(); renderHome(); toast('Microsoft hesabından çıkıldı'); renderMs(); }).catch(function (e) { $('#msErr').textContent = errText(e); }); });
+        return;
+      }
+      if (!st.client_ready) {
+        b.innerHTML = '<div style="display:flex;flex-direction:column;gap:10px"><p>Microsoft girişi için Mojang onayı almış Azure uygulamasının kimliği gerekir.</p><div class="field"><label for="msCid">Application (client) ID</label><input id="msCid" class="in mono" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" spellcheck="false"></div><div class="err" id="msErr"></div><p class="hint">Azure portalı → Uygulama kayıtları → uygulamanın "Genel bakış" sayfasındaki kimlik. Bir kere girilir. Azure\'da Authentication → "Allow public client flows" açık olmalı.</p><div><button class="btn primary" id="msCidSave">Kaydet</button></div></div>';
+        $('#msCidSave').addEventListener('click', function () { inv('set_ms_client_id', { id: $('#msCid').value.trim() }).then(renderMs).catch(function (e) { $('#msErr').textContent = errText(e); }); });
+        return;
+      }
+      b.innerHTML = '<div style="display:flex;flex-direction:column;gap:10px"><p>Tarayıcıda Microsoft sayfasını açıp bir kod girerek giriş yaparsın. Şifreni Kazma görmez.</p><div><button class="btn primary" id="msGo">Microsoft ile giriş yap</button></div><div class="err" id="msErr" aria-live="polite"></div></div>';
+      $('#msGo').addEventListener('click', msStart);
+    }).catch(function (e) { b.innerHTML = '<div class="err">' + esc(errText(e)) + '</div>'; });
+  }
+  function msStart() {
+    var b = $('#msBody'); b.innerHTML = '<span class="hint">Kod isteniyor...</span>';
+    inv('ms_begin').then(function (dc) {
+      b.innerHTML = '<div style="display:flex;flex-direction:column;gap:12px"><p>Açılan sayfada bu kodu gir ve hesabını seç:</p>' +
+        '<div class="mono" style="font-size:30px;font-weight:800;letter-spacing:.18em;text-align:center;padding:14px;border:1px solid var(--line);border-radius:10px;user-select:all" id="msCode">' + esc(dc.user_code) + '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="msCopy">' + kz.ic('copy', 14) + 'Kodu kopyala</button><button class="btn" id="msPage">' + kz.ic('globe', 14) + 'Sayfayı aç</button><button class="btn" id="msCancel">Vazgeç</button></div>' +
+        '<p class="hint" id="msWait">Girişi bekliyorum... (' + esc(dc.verification_uri.replace('https://', '')) + ')</p><div class="err" id="msErr" aria-live="polite"></div></div>';
+      $('#msCopy').addEventListener('click', function () { msCopy(dc.user_code); });
+      $('#msPage').addEventListener('click', function () { inv('ms_open_page').catch(function (e) { $('#msErr').textContent = errText(e); }); });
+      $('#msCancel').addEventListener('click', function () { inv('ms_cancel').catch(function () {}); renderMs(); });
+      inv('ms_open_page').catch(function () {});
+      inv('ms_finish').then(function (c) {
+        cfg = c; renderAccount(); renderHome(); $('#loginModal').hidden = true; toast(c.player + ' olarak Microsoft hesabıyla giriş yapıldı'); refresh(false);
+      }).catch(function (e) {
+        var m = errText(e); if (m.indexOf('iptal') >= 0) return;
+        renderMs(); setTimeout(function () { var el = $('#msErr'); if (el) el.textContent = m; }, 0);
+      });
+    }).catch(function (e) { renderMs(); setTimeout(function () { var el = $('#msErr'); if (el) el.textContent = errText(e); }, 0); });
+  }
   acctBtn.addEventListener('click', openLogin);
   $('#loginCancel').addEventListener('click', function () { $('#loginModal').hidden = true; });
   $('#loginSeg').addEventListener('click', function (e) {
@@ -64,6 +105,7 @@
     $('#lg-off').style.display = lmode === 'off' ? 'flex' : 'none';
     $('#lg-ms').style.display = lmode === 'ms' ? 'flex' : 'none';
     $('#loginOk').disabled = lmode === 'ms';
+    if (lmode === 'ms') renderMs();
   });
   $('#loginOk').addEventListener('click', function () {
     inv('set_player', { name: $('#offName').value.trim() }).then(function (c) {
@@ -423,7 +465,7 @@
       '<div class="field"><label for="acGame">Minecraft sürümü</label><select id="acGame" class="in">' + opts + '</select></div>' +
       '<div class="field"><label for="acLoader">Mod yükleyici</label><select id="acLoader" class="in">' + loaderOptions(loader) + '</select>' +
       '<span class="hint">Server mod kullanıyorsa onun yükleyicisini seç. Fabric/Quilt server\'lar kendini duyurmaz, sahibinden öğren.</span></div>' +
-      '<div class="callout">' + kz.ic('shield', 20) + '<div>Çevrimdışı hesapla yalnızca "cracked" (çevrimdışı mod) açık server\'lara girilir. Aternos\'ta bunu server sahibi <b>Cracked</b> ayarından açar. Premium server\'lar için Microsoft girişi gerekir, o henüz etkin değil.</div></div>' +
+      '<div class="callout">' + kz.ic('shield', 20) + '<div>Çevrimdışı hesapla yalnızca "cracked" (çevrimdışı mod) açık server\'lara girilir. Aternos\'ta bunu server sahibi <b>Cracked</b> ayarından açar. Premium server\'lar için Microsoft hesabıyla giriş yap (sol alttaki hesap kutusu).</div></div>' +
       '<div class="callout">' + kz.ic('refresh', 20) + '<div><b>Modları otomatik eşitlemek için</b> server sahibinden bir <b>paket kodu</b> iste ve soldaki "Davet / paket kodu" sekmesine yapıştır. Kod yoksa modları elle ekleyebilirsin: "Instance\'ı hazırla"ya bas, <b>Mod gezgini</b>\'nden bu instance\'ı seçip ekle, sonra bağlan.</div></div>' +
       '<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" id="acPrep">' + kz.ic('box', 18) + 'Instance\'ı hazırla</button><button class="btn primary lg" id="acGo">' + kz.ic('play', 18) + 'Bağlan</button></div><div class="err" id="acErr" aria-live="polite"></div></div>';
     var args = function () { return { address: addr, game: $('#acGame').value, loader: $('#acLoader').value, version: null }; };
@@ -452,7 +494,12 @@
       desc: 'Işık ve gölge paketleri. Dosya instance\'ın shaderpacks klasörüne iner. Shader\'lar Iris (Fabric/Quilt/NeoForge), Oculus (Forge) ya da OptiFine gerektirir; oyunda Seçenekler → Video → Shader Paketleri\'nden seç.',
       filter: function () { return true; }, empty: 'Önce bir instance gerek|Shader paketini koyacağımız bir instance oluştur.' }
   };
-  var bst = { mod: { cat: '', target: '', loaded: false, added: {} }, resourcepack: { cat: '', target: '', loaded: false, added: {} }, shader: { cat: '', target: '', loaded: false, added: {} } };
+  function newBst() { return { cat: '', target: '', loaded: false, added: {}, src: 'modrinth', sort: 'downloads', offset: 0, total: 0 }; }
+  var bst = { mod: newBst(), resourcepack: newBst(), shader: newBst() };
+  var cfReady = false;
+  var SORTS = [['downloads', 'En çok indirilen'], ['follows', 'Popüler'], ['updated', 'Son güncellenen'], ['newest', 'En yeni'], ['relevance', 'İlgililik']];
+  function fmtN(n) { return n >= 1e6 ? (n / 1e6).toFixed(1).replace('.', ',') + ' Mn' : n >= 1e3 ? Math.round(n / 1e3) + ' B' : String(n); }
+  var searchTimer = {};
   function brInstances(kind) { return instances.filter(BR[kind].filter); }
   function irisHint(kind, inst) {
     if (kind !== 'shader' || !inst) return '';
@@ -462,6 +509,9 @@
     return '<div class="callout">' + kz.ic('shield', 20) + '<div>Shader\'ların çalışması için <b>Iris</b> modu gerekir. <button class="btn sm" data-iris="1">' + kz.ic('download', 14) + 'Iris\'i bu instance\'a kur</button></div></div>';
   }
   function renderBrowse(kind) {
+    inv('cf_status').then(function (x) { cfReady = x.ready; renderBrowseNow(kind); }).catch(function () { renderBrowseNow(kind); });
+  }
+  function renderBrowseNow(kind) {
     var c = BR[kind], st = bst[kind], fi = brInstances(kind), v = $(c.view);
     if (!fi.some(function (i) { return i.id === st.target; })) st.target = fi.length ? fi[0].id : '';
     if (!fi.length) {
@@ -470,33 +520,55 @@
       return;
     }
     var cur = fi.filter(function (i) { return i.id === st.target; })[0];
+    var cfOn = st.src === 'curseforge';
     v.innerHTML = '<div class="ph"><div><h1>' + c.title + '</h1><p>' + esc(c.desc) + '</p></div></div>' +
-      '<div class="card" style="display:flex;flex-direction:column;gap:14px"><div class="joinbar"><input id="q-' + kind + '" class="in" style="font-family:var(--font-body)" placeholder="Ara..." aria-label="Ara"><button class="btn primary" data-bgo="' + kind + '">' + kz.ic('refresh', 18) + 'Ara</button></div>' +
-      '<div class="chips" role="group" aria-label="Kategori">' + c.cats.map(function (x) { return '<button class="chip" aria-pressed="' + (x[0] === st.cat) + '" data-bcat="' + kind + '" data-c="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>' +
+      '<div class="card" style="display:flex;flex-direction:column;gap:14px"><div class="joinbar"><input id="q-' + kind + '" class="in" style="font-family:var(--font-body)" placeholder="Ara... (boş bırakırsan listeyi gezersin)" aria-label="Ara" value="' + esc(st.q || '') + '"><button class="btn primary" data-bgo="' + kind + '">' + kz.ic('refresh', 18) + 'Ara</button></div>' +
+      '<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end"><div class="field"><label>Kaynak</label><div class="seg" style="grid-template-columns:repeat(2,auto)" role="group" aria-label="Kaynak"><button aria-pressed="' + !cfOn + '" data-bsrc="modrinth" data-k="' + kind + '">Modrinth</button><button aria-pressed="' + cfOn + '" data-bsrc="curseforge" data-k="' + kind + '">CurseForge</button></div></div>' +
+      '<div class="field"><label for="s-' + kind + '">Sırala</label><select id="s-' + kind + '" class="in" data-bsort="' + kind + '">' + SORTS.map(function (x) { return '<option value="' + x[0] + '"' + (x[0] === st.sort ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select></div></div>' +
+      (cfOn ? '' : '<div class="chips" role="group" aria-label="Kategori">' + c.cats.map(function (x) { return '<button class="chip" aria-pressed="' + (x[0] === st.cat) + '" data-bcat="' + kind + '" data-c="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>') +
+      (cfOn && !cfReady ? '<div class="callout">' + kz.ic('shield', 20) + '<div><b>CurseForge için ücretsiz bir API anahtarı gerekir</b> (Forge modlarının çoğu orada). <button class="btn sm" data-open-src="https://console.curseforge.com/">' + kz.ic('globe', 14) + 'Anahtar sayfasını aç</button><div class="joinbar" style="margin-top:8px"><input id="cfKey" class="in mono" placeholder="Anahtarı buraya yapıştır" autocomplete="off" spellcheck="false"><button class="btn primary" data-cfsave="1">Kaydet</button></div><span class="hint">Sayfada giriş yap → API keys → anahtarı kopyala. Bir kere girilir, yalnızca bu bilgisayarda saklanır.</span></div></div>' : '') +
+      (cfOn ? '<div class="hint">CurseForge sonuçlarında kategori süzgeci yok. Yazarı üçüncü taraf indirmeyi kapatmış modlar buradan kurulamaz; mesajı görürsen "Sayfa" düğmesiyle sitesine git.</div>' : '') +
       '<div class="field"><label for="i-' + kind + '">Eklenecek instance</label><select id="i-' + kind + '" class="in" data-binst="' + kind + '">' + fi.map(function (i) { return '<option value="' + esc(i.id) + '"' + (i.id === st.target ? ' selected' : '') + '>' + esc(i.name) + ' (' + esc(i.game) + ' · ' + esc(loaderName(i.loader)) + ')</option>'; }).join('') + '</select></div>' +
-      irisHint(kind, cur) + '<div class="err" id="e-' + kind + '" aria-live="polite"></div></div><div class="mods" id="l-' + kind + '"></div>';
-    var q = $('#q-' + kind); q.addEventListener('keydown', function (e) { if (e.key === 'Enter') searchBrowse(kind); });
+      irisHint(kind, cur) + '<div class="err" id="e-' + kind + '" aria-live="polite"></div></div><div class="hint" id="n-' + kind + '"></div><div class="mods" id="l-' + kind + '"></div><div id="m-' + kind + '" style="text-align:center;margin:14px 0"></div>';
+    var q = $('#q-' + kind);
+    q.addEventListener('keydown', function (e) { if (e.key === 'Enter') searchBrowse(kind); });
+    q.addEventListener('input', function () { st.q = q.value; clearTimeout(searchTimer[kind]); searchTimer[kind] = setTimeout(function () { searchBrowse(kind); }, 450); });
+    if (cfOn && !cfReady) return;
     searchBrowse(kind);
   }
   function sideLabel(h) { return h.server_side === 'unsupported' ? 'Yalnızca istemci' : h.client_side === 'unsupported' ? 'Yalnızca server' : 'İstemci + server'; }
-  function searchBrowse(kind) {
-    var st = bst[kind], list = $('#l-' + kind); $('#e-' + kind).textContent = ''; list.innerHTML = '<div class="card hint">Aranıyor...</div>';
-    inv('search_content', { instance: st.target, kind: kind, query: $('#q-' + kind).value.trim(), category: st.cat || null }).then(function (hits) {
-      if (!hits.length) { list.innerHTML = '<div class="card hint">Eşleşen sonuç yok. Aramayı kısaltmayı ya da kategoriyi "Tümü" yapmayı dene.</div>'; return; }
-      list.innerHTML = hits.map(function (h) {
-        var done = st.added[st.target + '|' + h.project_id];
-        var icon = h.icon_url ? '<img class="ic" src="' + esc(h.icon_url) + '" alt="" width="48" height="48">' : '<div class="ic" style="background:var(--panel-2);display:grid;place-items:center;font-weight:800">' + esc((h.title || '?').charAt(0).toUpperCase()) + '</div>';
-        return '<article class="card mod">' + icon + '<div class="tx"><h3>' + esc(h.title) + '</h3><p>' + esc(h.description) + '</p><div class="acts">' + (kind === 'mod' ? '<span class="pill mute">' + esc(sideLabel(h)) + '</span>' : '') +
-          h.categories.slice(0, 3).map(function (c) { return '<span class="pill mute">' + esc(c) + '</span>'; }).join('') + '</div></div>' +
-          '<button class="btn sm' + (done ? '' : ' primary') + '" style="align-self:flex-start" data-add="' + esc(h.project_id) + '" data-kind="' + kind + '"' + (done ? ' disabled' : '') + '>' + (done ? 'Eklendi' : 'Ekle') + '</button></article>';
-      }).join('');
-    }).catch(function (e) { list.innerHTML = ''; $('#e-' + kind).textContent = errText(e); });
+  function hitCard(h, kind, st) {
+    var done = st.added[st.target + '|' + h.source + '|' + h.project_id];
+    var icon = h.icon_url ? '<img class="ic" src="' + esc(h.icon_url) + '" alt="" width="48" height="48">' : '<div class="ic" style="background:var(--panel-2);display:grid;place-items:center;font-weight:800">' + esc((h.title || '?').charAt(0).toUpperCase()) + '</div>';
+    return '<article class="card mod">' + icon + '<div class="tx"><h3>' + esc(h.title) + '</h3><p>' + esc(h.description) + '</p><div class="acts">' + (kind === 'mod' && h.source === 'modrinth' ? '<span class="pill mute">' + esc(sideLabel(h)) + '</span>' : '') +
+      (h.downloads ? '<span class="pill mute">' + fmtN(h.downloads) + ' indirme</span>' : '') +
+      h.categories.slice(0, 3).map(function (c) { return '<span class="pill mute">' + esc(c) + '</span>'; }).join('') + '</div></div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;align-items:stretch"><button class="btn sm' + (done ? '' : ' primary') + '" data-add="' + esc(h.project_id) + '" data-kind="' + kind + '" data-src="' + esc(h.source) + '"' + (done ? ' disabled' : '') + '>' + (done ? 'Eklendi' : 'Ekle') + '</button>' +
+      (h.page_url ? '<button class="btn sm" data-open-src="' + esc(h.page_url) + '">Sayfa</button>' : '') + '</div></article>';
+  }
+  function searchBrowse(kind, append) {
+    var st = bst[kind], list = $('#l-' + kind); if (!list) return;
+    if (st.src === 'curseforge' && !cfReady) return;
+    var off = append ? st.offset : 0, token = (st.token = (st.token || 0) + 1), more = $('#m-' + kind);
+    $('#e-' + kind).textContent = ''; more.innerHTML = '';
+    if (!append) { list.innerHTML = '<div class="card hint">Aranıyor...</div>'; $('#n-' + kind).textContent = ''; }
+    inv('browse_content', { instance: st.target, kind: kind, query: $('#q-' + kind).value.trim(), category: st.src === 'modrinth' ? (st.cat || null) : null, source: st.src, sort: st.sort, offset: off }).then(function (page) {
+      if (token !== st.token) return; // daha yeni bir arama başladı
+      var hits = page.hits;
+      if (!append && !hits.length) { list.innerHTML = '<div class="card hint">Eşleşen sonuç yok. Aramayı kısaltmayı, kategoriyi "Tümü" yapmayı ya da kaynağı değiştirmeyi dene.</div>'; return; }
+      if (!append) list.innerHTML = '';
+      list.insertAdjacentHTML('beforeend', hits.map(function (h) { return hitCard(h, kind, st); }).join(''));
+      st.offset = off + hits.length; st.total = page.total;
+      $('#n-' + kind).textContent = page.total.toLocaleString('tr-TR') + ' sonuç, ' + Math.min(st.offset, page.total).toLocaleString('tr-TR') + ' tanesi gösteriliyor';
+      if (hits.length && st.offset < page.total && st.offset < 9000) more.innerHTML = '<button class="btn" data-bmore="' + kind + '">' + kz.ic('download', 16) + 'Daha fazla yükle</button>';
+    }).catch(function (e) { if (token !== st.token) return; if (!append) list.innerHTML = ''; $('#e-' + kind).textContent = errText(e); });
   }
   function addContent(btn, kindOverride, projectOverride) {
     var kind = kindOverride || btn.dataset.kind, st = bst[kind], id = projectOverride || btn.dataset.add, label = btn.textContent;
+    var src = projectOverride ? 'modrinth' : (btn.dataset.src || 'modrinth');
     btn.disabled = true; btn.textContent = 'Ekleniyor...';
-    inv('install_content', { instance: st.target, kind: kind === 'mod' || projectOverride ? 'mod' : kind, project: id }).then(function (names) {
-      st.added[st.target + '|' + id] = true; btn.textContent = 'Eklendi'; btn.classList.remove('primary');
+    inv('install_content', { instance: st.target, kind: kind === 'mod' || projectOverride ? 'mod' : kind, project: id, source: src }).then(function (names) {
+      st.added[st.target + '|' + src + '|' + id] = true; btn.textContent = 'Eklendi'; btn.classList.remove('primary');
       toast(names.length ? names.join(', ') + ' eklendi' : 'Zaten ekli'); return refresh(false);
     }).catch(function (e) { btn.disabled = false; btn.textContent = label; var el = $('#e-' + kind); if (el) el.textContent = errText(e); else toast(errText(e)); });
   }
@@ -555,7 +627,7 @@
       '<div class="field" style="flex:1;min-width:220px"><label for="skinEly">Ely.by oyuncu adı</label><div class="joinbar"><input id="skinEly" class="in" maxlength="16" placeholder="oyuncu adı" autocomplete="off"><button class="btn primary" id="skinElyGo">' + kz.ic('download', 16) + 'İndir</button></div></div></div></div>' +
       (skinList.length ? '<div class="skin-grid">' + cards + '</div>' : '<div class="card hint">Henüz skin yok. Yukarıdan bir dosya seç ya da bir oyuncu adıyla indir.</div>') +
       '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Skin oyunda görünsün</h2>' +
-      '<div class="callout">' + kz.ic('shield', 20) + '<div>Çevrimdışı hesaplarda vanilla Minecraft skin göstermez. Seçtiğin skinin oyunda görünmesi için instance\'a <b>CustomSkinLoader</b> modu gerekir. Skin yalnızca kendi ekranında görünür, server\'daki diğer oyuncular görmez (onların da aynı modu kullanması gerekir). Microsoft girişi gelince gerçek skin yüklemesi eklenecek.</div></div>' +
+      '<div class="callout">' + kz.ic('shield', 20) + '<div>Çevrimdışı hesaplarda vanilla Minecraft skin göstermez. Seçtiğin skinin oyunda görünmesi için instance\'a <b>CustomSkinLoader</b> modu gerekir. Skin yalnızca kendi ekranında görünür, server\'daki diğer oyuncular görmez (onların da aynı modu kullanması gerekir). Microsoft hesabıyla girersen gerçek skinin oyunda kendiliğinden görünür.</div></div>' +
       (mi.length ? '<div class="joinbar"><select id="skinInst" class="in" style="flex:1;min-width:220px">' + mi.map(function (i) { return '<option value="' + esc(i.id) + '"' + (i.id === instSkinTarget ? ' selected' : '') + '>' + esc(i.name) + ' (' + esc(i.game) + ' · ' + esc(loaderName(i.loader)) + ')</option>'; }).join('') + '</select><button class="btn" id="skinCsl">' + kz.ic('download', 16) + 'CustomSkinLoader\'ı kur</button></div>' : '<p class="hint">Modlu (Fabric, Quilt, Forge, NeoForge) bir instance oluşturunca buradan modu kurabilirsin.</p>') + '</div>';
     $$('#v-skins canvas[data-sid]').forEach(function (cv) { inv('skin_data', { id: cv.dataset.sid }).then(function (u) { drawSkin(cv, u); }); });
     var file = $('#skinFile');
@@ -608,6 +680,16 @@
     }
     var o = e.target.closest('[data-open]'); if (o) { inv('open_instance_folder', { id: o.dataset.open }).catch(function (er) { toast(errText(er)); }); return; }
     var go = e.target.closest('[data-bgo]'); if (go) { searchBrowse(go.dataset.bgo); return; }
+    var bm = e.target.closest('[data-bmore]'); if (bm) { searchBrowse(bm.dataset.bmore, true); return; }
+    var bs = e.target.closest('[data-bsrc]');
+    if (bs) { var kk = bs.dataset.k; if (bst[kk].src !== bs.dataset.bsrc) { bst[kk].src = bs.dataset.bsrc; bst[kk].offset = 0; renderBrowse(kk); } return; }
+    var cs = e.target.closest('[data-cfsave]');
+    if (cs) {
+      var vw = cs.closest('[id^="v-"]'), kd = Object.keys(BR).filter(function (k) { return '#' + vw.id === BR[k].view; })[0];
+      inv('set_curseforge_key', { key: $('#cfKey').value.trim() }).then(function (x) { cfReady = x.ready; toast('CurseForge anahtarı kaydedildi'); renderBrowse(kd); }).catch(function (er) { $('#e-' + kd).textContent = errText(er); });
+      return;
+    }
+    var os = e.target.closest('[data-open-src]'); if (os && !os.closest('#v-skins')) { inv('open_url', { url: os.dataset.openSrc }).catch(function (er) { toast(errText(er)); }); return; }
     var bc = e.target.closest('[data-bcat]');
     if (bc) { var k = bc.dataset.bcat; bst[k].cat = bc.dataset.c; $$('[data-bcat="' + k + '"]').forEach(function (x) { x.setAttribute('aria-pressed', x === bc); }); searchBrowse(k); return; }
     var ir = e.target.closest('[data-iris]'); if (ir) { addContent(ir, 'shader', 'iris'); return; }
@@ -615,6 +697,7 @@
   });
 
   document.addEventListener('change', function (e) {
+    var so = e.target.closest('[data-bsort]'); if (so) { bst[so.dataset.bsort].sort = so.value; searchBrowse(so.dataset.bsort); return; }
     var sel = e.target.closest('[data-binst]'); if (!sel) return;
     var k = sel.dataset.binst; bst[k].target = sel.value; renderBrowse(k);
   });

@@ -47,6 +47,32 @@ pub fn get_text(url: &str, max: u64) -> R<String> {
     String::from_utf8(get_bytes(url, max)?).map_err(|_| format!("{url}: geçerli UTF-8 değil"))
 }
 
+/// Üstbilgi gerektiren API'ler için (ör. CurseForge `x-api-key`). Hata ayıklanırken anahtar yanıta sızmasın diye mesajda adres yazılmaz.
+pub fn get_text_with(url: &str, max: u64, headers: &[(&str, &str)]) -> R<String> {
+    let mut last = String::new();
+    for attempt in 0..2 {
+        let mut req = agent().get(url);
+        for (k, v) in headers {
+            req = req.set(k, v);
+        }
+        match req.call() {
+            Ok(resp) => {
+                let mut buf = Vec::new();
+                return match resp.into_reader().take(max + 1).read_to_end(&mut buf) {
+                    Ok(_) if buf.len() as u64 > max => Err("yanıt beklenenden büyük".into()),
+                    Ok(_) => String::from_utf8(buf).map_err(|_| "geçerli UTF-8 değil".to_string()),
+                    Err(e) => Err(e.to_string()),
+                };
+            }
+            Err(ureq::Error::Status(code, _)) if matches!(code, 401 | 403) => return Err(format!("sunucu erişimi reddetti (HTTP {code}); API anahtarını kontrol et")),
+            Err(ureq::Error::Status(code, _)) if code < 500 => return Err(format!("sunucu hata döndürdü (HTTP {code})")),
+            Err(e) => last = e.to_string(),
+        }
+        std::thread::sleep(Duration::from_millis(500 * (attempt + 1)));
+    }
+    Err(format!("istek başarısız ({last})"))
+}
+
 pub fn sha1_hex(b: &[u8]) -> String {
     hex::encode(Sha1::digest(b))
 }

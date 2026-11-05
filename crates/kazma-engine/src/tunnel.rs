@@ -37,21 +37,34 @@ pub fn open_claim(url: &str) -> R<()> {
     crate::app::open_in_file_manager(Path::new(url))
 }
 
+/// playit.gg ajanını imzalayan kuruluş (Authenticode sertifikasındaki ad). Başka bir imzacı kabul edilmez.
+pub const PUBLISHER: &str = "Developed Methods LLC";
+
+/// PowerShell çıktısı: "<Durum>|<İmzacı adı>". Yalnızca durum "Valid" ve ad PUBLISHER ise kabul edilir.
+pub fn signature_ok(output: &str) -> bool {
+    let line = output.trim();
+    match line.split_once('|') {
+        Some((status, name)) => status.trim() == "Valid" && name.trim() == PUBLISHER,
+        None => false,
+    }
+}
+
 #[cfg(windows)]
-fn signature_valid(p: &Path) -> bool {
+fn signature_info(p: &Path) -> String {
     use std::os::windows::process::CommandExt;
     let path = p.to_string_lossy().replace('\'', "''");
+    let script = format!("$s=Get-AuthenticodeSignature -LiteralPath '{path}'; $n=''; if($s.SignerCertificate){{$n=$s.SignerCertificate.GetNameInfo('SimpleName',$false)}}; Write-Output ($s.Status.ToString()+'|'+$n)");
     std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &format!("$s=Get-AuthenticodeSignature -LiteralPath '{path}'; if($s.Status -eq 'Valid' -and $s.SignerCertificate.Subject -match 'playit'){{exit 0}}else{{exit 1}}")])
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .creation_flags(0x0800_0000)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
 }
 
 #[cfg(not(windows))]
-fn signature_valid(_: &Path) -> bool {
-    false
+fn signature_info(_: &Path) -> String {
+    String::new()
 }
 
 /// Ajanı indirir (yoksa) ve imzasını doğrular.
@@ -69,9 +82,10 @@ pub fn ensure_agent(root: &Path, rep: &dyn Reporter) -> R<PathBuf> {
         fs::create_dir_all(agent_dir(root)).map_err(|e| e.to_string())?;
         let tmp = agent_dir(root).join("playit.download");
         fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
-        if !signature_valid(&tmp) {
+        let info = signature_info(&tmp);
+        if !signature_ok(&info) {
             let _ = fs::remove_file(&tmp);
-            return Err("playit.gg ajanının dijital imzası doğrulanamadı; çalıştırılmadı.".into());
+            return Err(format!("playit.gg ajanının dijital imzası doğrulanamadı; çalıştırılmadı. (Beklenen imzacı: {PUBLISHER}; bulunan: {})", if info.is_empty() { "okunamadı".to_string() } else { info }));
         }
         fs::rename(&tmp, &p).map_err(|e| e.to_string())?;
     }
@@ -81,6 +95,14 @@ pub fn ensure_agent(root: &Path, rep: &dyn Reporter) -> R<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_pinned_publisher_with_a_valid_signature_passes() {
+        assert!(signature_ok("Valid|Developed Methods LLC\r\n"));
+        for bad in ["Valid|playit", "Valid|Developed Methods LLC Evil", "NotSigned|", "HashMismatch|Developed Methods LLC", "UnknownError|Developed Methods LLC", "", "Valid", "valid|Developed Methods LLC"] {
+            assert!(!signature_ok(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn claim_urls_are_strict() {

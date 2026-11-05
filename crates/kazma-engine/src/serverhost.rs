@@ -471,9 +471,17 @@ fn modrinth_loader(spec: &ServerSpec) -> &str {
 }
 
 pub fn search_content(root: &Path, id: &str, query: &str, category: Option<&str>) -> R<Vec<crate::modrinth::Hit>> {
+    browse_content(root, id, query, category, "modrinth", "relevance", 0).map(|p| p.hits)
+}
+
+pub fn browse_content(root: &Path, id: &str, query: &str, category: Option<&str>, source: &str, sort: &str, offset: u64) -> R<crate::modrinth::Page> {
     let spec = read_spec(root, id)?;
     content_dir(root, &spec)?;
-    crate::modrinth::search_live(query, &spec.game, Some(modrinth_loader(&spec)), category, crate::modrinth::Kind::Mod)
+    // CurseForge eklenti (Paper) türünü tanımaz; yalnızca mod yükleyicileri için.
+    if source == "curseforge" && spec.kind == "paper" {
+        return Err("CurseForge'da Paper eklentisi yok; eklentiler için Modrinth'i seç.".into());
+    }
+    crate::app::search_any(root, &spec.game, Some(modrinth_loader(&spec)), crate::modrinth::Kind::Mod, query, category, source, sort, offset)
 }
 
 /// Server'da kurulu mod/eklenti dosyaları.
@@ -527,9 +535,13 @@ pub fn public_ip() -> R<String> {
 }
 
 pub fn install_content(root: &Path, id: &str, project: &str, rep: &dyn Reporter) -> R<Vec<String>> {
+    install_content_from(root, id, project, "modrinth", rep)
+}
+
+pub fn install_content_from(root: &Path, id: &str, project: &str, source: &str, rep: &dyn Reporter) -> R<Vec<String>> {
     let spec = read_spec(root, id)?;
     let dir = content_dir(root, &spec)?;
-    crate::modrinth::install_live(&dir, project, &spec.game, Some(modrinth_loader(&spec)), crate::modrinth::Kind::Mod, rep)
+    crate::app::install_any(root, &dir, project, &spec.game, Some(modrinth_loader(&spec)), crate::modrinth::Kind::Mod, source, rep)
 }
 
 /// Oyuncuların modları otomatik eşitlemesi için paket kodu (server'ın mod klasöründen).

@@ -1,5 +1,6 @@
 //! Kazma motoru: arayüzden bağımsız kurulum, başlatma, eşitleme. Hem komut satırı hem Tauri kullanır.
 pub mod app;
+pub mod curseforge;
 pub mod discord;
 pub mod firewall;
 pub mod gametheme;
@@ -8,6 +9,7 @@ pub mod install;
 pub mod loaders;
 pub mod modrinth;
 pub mod modtheme;
+pub mod msauth;
 pub mod net;
 pub mod ping;
 pub mod report;

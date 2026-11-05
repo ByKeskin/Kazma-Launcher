@@ -341,10 +341,67 @@ async fn search_content(state: State<'_, AppState>, instance: String, kind: Stri
     tauri::async_runtime::spawn_blocking(move || app::search_content(&root, &instance, &kind, &query, category.as_deref())).await.map_err(|e| e.to_string())?
 }
 
+/// Sayfalı arama: `source` modrinth/curseforge, `sort` relevance/downloads/follows/newest/updated.
 #[tauri::command]
-async fn install_content(handle: AppHandle, state: State<'_, AppState>, instance: String, kind: String, project: String) -> CmdResult<Vec<String>> {
+async fn browse_content(state: State<'_, AppState>, instance: String, kind: String, query: String, category: Option<String>, source: Option<String>, sort: Option<String>, offset: Option<u64>) -> CmdResult<modrinth::Page> {
     let root = state.root.clone();
-    tauri::async_runtime::spawn_blocking(move || app::install_content(&root, &instance, &kind, &project, &Events(handle))).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || app::browse_content(&root, &instance, &kind, &query, category.as_deref(), source.as_deref().unwrap_or("modrinth"), sort.as_deref().unwrap_or("relevance"), offset.unwrap_or(0)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn install_content(handle: AppHandle, state: State<'_, AppState>, instance: String, kind: String, project: String, source: Option<String>) -> CmdResult<Vec<String>> {
+    let root = state.root.clone();
+    tauri::async_runtime::spawn_blocking(move || app::install_content_from(&root, &instance, &kind, &project, source.as_deref().unwrap_or("modrinth"), &Events(handle))).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn ms_status(state: State<'_, AppState>) -> app::MsStatus {
+    app::ms_status(&state.root)
+}
+
+#[tauri::command]
+fn set_ms_client_id(state: State<'_, AppState>, id: String) -> CmdResult<app::MsStatus> {
+    app::set_ms_client_id(&state.root, &id)
+}
+
+#[tauri::command]
+async fn ms_begin(state: State<'_, AppState>) -> CmdResult<kazma_engine::msauth::DeviceCode> {
+    let root = state.root.clone();
+    tauri::async_runtime::spawn_blocking(move || app::ms_begin(&root)).await.map_err(|e| e.to_string())?
+}
+
+/// Kullanıcı kodu girene kadar bekler (dakikalar sürebilir).
+#[tauri::command]
+async fn ms_finish(state: State<'_, AppState>) -> CmdResult<app::Config> {
+    let root = state.root.clone();
+    tauri::async_runtime::spawn_blocking(move || app::ms_finish(&root)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn ms_cancel() {
+    kazma_engine::msauth::cancel();
+}
+
+#[tauri::command]
+fn ms_open_page() -> CmdResult<()> {
+    app::ms_open_page()
+}
+
+#[tauri::command]
+fn ms_logout(state: State<'_, AppState>) -> CmdResult<app::Config> {
+    app::ms_logout(&state.root)
+}
+
+#[tauri::command]
+fn cf_status(state: State<'_, AppState>) -> app::CfStatus {
+    app::cf_status(&state.root)
+}
+
+#[tauri::command]
+fn set_curseforge_key(state: State<'_, AppState>, key: String) -> CmdResult<app::CfStatus> {
+    app::set_curseforge_key(&state.root, &key)
 }
 
 
@@ -505,15 +562,17 @@ fn host_open_exports(state: State<'_, AppState>) -> CmdResult<()> {
 }
 
 #[tauri::command]
-async fn host_search(state: State<'_, AppState>, id: String, query: String, category: Option<String>) -> CmdResult<Vec<modrinth::Hit>> {
+async fn host_search(state: State<'_, AppState>, id: String, query: String, category: Option<String>, source: Option<String>, sort: Option<String>, offset: Option<u64>) -> CmdResult<modrinth::Page> {
     let root = state.root.clone();
-    tauri::async_runtime::spawn_blocking(move || serverhost::search_content(&root, &id, &query, category.as_deref())).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || serverhost::browse_content(&root, &id, &query, category.as_deref(), source.as_deref().unwrap_or("modrinth"), sort.as_deref().unwrap_or("relevance"), offset.unwrap_or(0)))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn host_install(handle: AppHandle, state: State<'_, AppState>, id: String, project: String) -> CmdResult<Vec<String>> {
+async fn host_install(handle: AppHandle, state: State<'_, AppState>, id: String, project: String, source: Option<String>) -> CmdResult<Vec<String>> {
     let root = state.root.clone();
-    tauri::async_runtime::spawn_blocking(move || serverhost::install_content(&root, &id, &project, &Events(handle))).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || serverhost::install_content_from(&root, &id, &project, source.as_deref().unwrap_or("modrinth"), &Events(handle))).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -656,6 +715,16 @@ fn main() {
             join_prepare,
             join_run,
             search_content,
+            browse_content,
+            cf_status,
+            ms_status,
+            set_ms_client_id,
+            ms_begin,
+            ms_finish,
+            ms_cancel,
+            ms_open_page,
+            ms_logout,
+            set_curseforge_key,
             install_content,
             list_servers,
             server_status,

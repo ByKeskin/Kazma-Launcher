@@ -62,6 +62,33 @@ pub struct Hit {
     pub client_side: String,
     pub server_side: String,
     pub icon_url: Option<String>,
+    /// Toplam indirme sayısı (sıralama ve gösterim için).
+    pub downloads: u64,
+    /// "modrinth" ya da "curseforge".
+    pub source: String,
+    /// Projenin web sayfası (yazar indirmeye izin vermiyorsa buradan elle indirilir).
+    pub page_url: Option<String>,
+}
+
+/// Bir arama sayfası: sonuçlar ve eşleşen toplam sayı (sayfalama için).
+#[derive(Debug, Serialize, PartialEq)]
+pub struct Page {
+    pub hits: Vec<Hit>,
+    pub total: u64,
+    pub offset: u64,
+}
+
+pub const PAGE_SIZE: u64 = 24;
+
+/// İzinli sıralama ölçütleri: Modrinth `index` değeri.
+pub fn sort_index(sort: &str) -> &'static str {
+    match sort {
+        "downloads" => "downloads",
+        "follows" => "follows",
+        "newest" => "newest",
+        "updated" => "updated",
+        _ => "relevance",
+    }
 }
 
 fn token_ok(s: &str) -> bool {
@@ -81,6 +108,11 @@ fn safe_name(f: &str, exts: &[&str]) -> bool {
 
 /// `loader`: yalnızca modlarda anlamlı (fabric, forge...). Kaynak paketi ve shader aramasında verilmez.
 pub fn search_url(query: &str, game: &str, loader: Option<&str>, category: Option<&str>, kind: Kind) -> R<String> {
+    search_url_ex(query, game, loader, category, kind, "relevance", 0)
+}
+
+/// `sort`: relevance, downloads, follows, newest, updated. `offset`: kaç sonuç atlanacak (sayfalama).
+pub fn search_url_ex(query: &str, game: &str, loader: Option<&str>, category: Option<&str>, kind: Kind, sort: &str, offset: u64) -> R<String> {
     if !token_ok(game) || loader.map_or(false, |l| !token_ok(l)) || category.map_or(false, |c| !token_ok(c)) {
         return Err("arama ölçütü geçersiz karakter içeriyor".into());
     }
@@ -92,16 +124,22 @@ pub fn search_url(query: &str, game: &str, loader: Option<&str>, category: Optio
         facets.push(format!(r#"["categories:{c}"]"#));
     }
     let facets = format!("[{}]", facets.join(","));
-    Url::parse_with_params("https://api.modrinth.com/v2/search", [("query", query.trim()), ("facets", facets.as_str()), ("limit", "24")])
+    Url::parse_with_params("https://api.modrinth.com/v2/search", [("query", query.trim()), ("facets", facets.as_str()), ("limit", PAGE_SIZE.to_string().as_str()), ("index", sort_index(sort)), ("offset", offset.to_string().as_str())])
         .map(|u| u.to_string())
         .map_err(|e| e.to_string())
 }
 
 pub fn parse_search(json: &str) -> R<Vec<Hit>> {
+    parse_page(json).map(|p| p.hits)
+}
+
+pub fn parse_page(json: &str) -> R<Page> {
     let v: Value = serde_json::from_str(json).map_err(|e| format!("Modrinth yanıtı okunamadı: {e}"))?;
     let hits = v.get("hits").and_then(Value::as_array).ok_or("Modrinth yanıtında 'hits' yok")?;
     let s = |h: &Value, k: &str| h.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-    Ok(hits
+    let total = v.get("total_hits").and_then(Value::as_u64).unwrap_or(hits.len() as u64);
+    let offset = v.get("offset").and_then(Value::as_u64).unwrap_or(0);
+    let hits = hits
         .iter()
         .filter_map(|h| {
             let id = s(h, "project_id");
@@ -117,10 +155,14 @@ pub fn parse_search(json: &str) -> R<Vec<Hit>> {
                 client_side: s(h, "client_side"),
                 server_side: s(h, "server_side"),
                 icon_url: icon,
+                downloads: h.get("downloads").and_then(Value::as_u64).unwrap_or(0),
+                source: "modrinth".into(),
+                page_url: None,
                 project_id: id,
             })
         })
-        .collect())
+        .collect();
+    Ok(Page { hits, total, offset })
 }
 
 #[derive(Debug, PartialEq)]
@@ -302,6 +344,10 @@ pub fn search_live(query: &str, game: &str, loader: Option<&str>, category: Opti
     parse_search(&get_text(&search_url(query, game, loader, category, kind)?, 4 << 20)?)
 }
 
+pub fn search_page_live(query: &str, game: &str, loader: Option<&str>, category: Option<&str>, kind: Kind, sort: &str, offset: u64) -> R<Page> {
+    parse_page(&get_text(&search_url_ex(query, game, loader, category, kind, sort, offset)?, 4 << 20)?)
+}
+
 pub fn install_live(dir: &Path, project: &str, game: &str, loader: Option<&str>, kind: Kind, rep: &dyn Reporter) -> R<Vec<String>> {
     install_project(dir, project, game, loader, kind, &|u| get_text(u, 4 << 20), &|u| get_bytes(u, 300 << 20), rep)
 }
@@ -350,6 +396,17 @@ mod tests {
         let nv = versions_url("AANobbMI", "1.21.1", None).unwrap();
         assert!(!nv.contains("loaders"));
         assert!(versions_url("../x", "1.21.1", Some("fabric")).is_err());
+    }
+
+    #[test]
+    fn search_url_has_sort_and_offset_and_parses_totals() {
+        let u = search_url_ex("", "1.20.1", Some("forge"), None, Kind::Mod, "downloads", 48).unwrap();
+        for part in ["index=downloads", "offset=48", "limit=24", "categories%3Aforge"] {
+            assert!(u.contains(part), "{part} yok: {u}");
+        }
+        assert!(search_url_ex("", "1.20.1", None, None, Kind::Mod, "bilinmeyen; drop", 0).unwrap().contains("index=relevance"), "bilinmeyen sıralama güvenli varsayılana düşer");
+        let p = parse_page(r#"{"hits":[{"project_id":"abc","slug":"a","title":"A","downloads":12345}],"offset":24,"limit":24,"total_hits":777}"#).unwrap();
+        assert_eq!((p.total, p.offset, p.hits[0].downloads, p.hits[0].source.as_str()), (777, 24, 12345, "modrinth"));
     }
 
     #[test]

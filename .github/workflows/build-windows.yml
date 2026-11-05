@@ -25,6 +25,10 @@ jobs:
         run: cargo install tauri-cli --version "^2" --locked
       - name: Uygulama ve kurulum sihirbazı (NSIS)
         working-directory: src-tauri
+        env:
+          # İsteğe bağlı: depo ayarlarından (Settings → Secrets and variables → Actions) tanımlanırsa uygulamaya gömülür.
+          KAZMA_CF_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+          KAZMA_MS_CLIENT_ID: ${{ vars.MS_CLIENT_ID }}
         run: cargo tauri build --bundles nsis
       - name: Paketle
         shell: pwsh

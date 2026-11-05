@@ -204,44 +204,76 @@
 
     function copyText(t) { (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { toast('Kopyalandı'); }).catch(function () { toast('Kopyalanamadı, elle seç'); }); }
     var MODCATS = [['', 'Tümü'], ['optimization', 'Performans'], ['technology', 'Teknoloji'], ['adventure', 'Macera'], ['utility', 'Araçlar'], ['management', 'Yönetim'], ['library', 'Kütüphane']];
-    var modCat = '';
+    var HSORTS = [['downloads', 'En çok indirilen'], ['follows', 'Popüler'], ['updated', 'Son güncellenen'], ['newest', 'En yeni'], ['relevance', 'İlgililik']];
+    var modCat = '', hsrc = 'modrinth', hsort = 'downloads';
+    function fmtN(n) { return n >= 1e6 ? (n / 1e6).toFixed(1).replace('.', ',') + ' Mn' : n >= 1e3 ? Math.round(n / 1e3) + ' B' : String(n); }
     function tabMods(h, b) {
       if (h.kind === 'vanilla') { b.innerHTML = '<div class="card hint">Vanilla server mod ya da eklenti desteklemez. Mod/eklenti için Paper, Fabric, Forge veya NeoForge türünde yeni bir server kur.</div>'; return; }
       var plug = h.kind === 'paper', noun = plug ? 'Eklenti' : 'Mod';
-      b.innerHTML = '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">' + noun + ' gezgini (Modrinth)</h2>' +
-        '<div class="joinbar"><input id="hmQ" class="in" style="flex:1" placeholder="Ara..." autocomplete="off" aria-label="Ara"><button class="btn primary" id="hmGo">Ara</button></div>' +
-        '<div class="chips" role="group" aria-label="Kategori">' + MODCATS.map(function (x) { return '<button class="chip" aria-pressed="' + (x[0] === modCat) + '" data-hc="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>' +
-        '<div class="err" id="hmErr"></div><p class="hint">Yalnızca bu server\'ın sürümüne (' + esc(h.game) + ') ve yükleyicisine uyan, server\'da çalışan ' + noun.toLowerCase() + 'ler gösterilir. Gerekli bağımlılıklar da eklenir, dosyalar SHA-512 ile doğrulanır.</p></div>' +
-        '<div class="card" style="display:flex;flex-direction:column;gap:8px"><h2 style="margin:0">Kurulu ' + noun.toLowerCase() + 'ler</h2><div id="hmInst"></div></div>' +
-        '<div class="mods" id="hmOut"></div>';
-      var added = {};
+      if (plug) hsrc = 'modrinth';
+      inv('cf_status').catch(function () { return { ready: false }; }).then(function (cf) {
+        var cfOn = hsrc === 'curseforge';
+        b.innerHTML = '<div class="card" style="display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">' + noun + ' gezgini</h2>' +
+          '<div class="joinbar"><input id="hmQ" class="in" style="flex:1" placeholder="Ara... (boş bırakırsan listeyi gezersin)" autocomplete="off" aria-label="Ara"><button class="btn primary" id="hmGo">Ara</button></div>' +
+          '<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">' +
+          (plug ? '' : '<div class="field"><label>Kaynak</label><div class="seg" style="grid-template-columns:repeat(2,auto)" role="group" aria-label="Kaynak"><button aria-pressed="' + !cfOn + '" data-hs="modrinth">Modrinth</button><button aria-pressed="' + cfOn + '" data-hs="curseforge">CurseForge</button></div></div>') +
+          '<div class="field"><label for="hmSort">Sırala</label><select id="hmSort" class="in">' + HSORTS.map(function (x) { return '<option value="' + x[0] + '"' + (x[0] === hsort ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select></div></div>' +
+          (cfOn ? '' : '<div class="chips" role="group" aria-label="Kategori">' + MODCATS.map(function (x) { return '<button class="chip" aria-pressed="' + (x[0] === modCat) + '" data-hc="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>') +
+          (cfOn && !cf.ready ? '<div class="callout">' + kz.ic('shield', 20) + '<div><b>CurseForge için ücretsiz bir API anahtarı gerekir.</b> <button class="btn sm" id="hCfOpen">' + kz.ic('globe', 14) + 'Anahtar sayfasını aç</button><div class="joinbar" style="margin-top:8px"><input id="hCfKey" class="in mono" placeholder="Anahtarı buraya yapıştır" autocomplete="off" spellcheck="false"><button class="btn primary" id="hCfSave">Kaydet</button></div></div></div>' : '') +
+          '<div class="err" id="hmErr"></div><p class="hint">Yalnızca bu server\'ın sürümüne (' + esc(h.game) + ') ve yükleyicisine uyan ' + noun.toLowerCase() + 'ler gösterilir. Gerekli bağımlılıklar da eklenir, dosyalar özet (hash) ile doğrulanır.' + (cfOn ? ' Yazarı üçüncü taraf indirmeyi kapatmış modlar kurulamaz; "Sayfa" düğmesiyle sitesine git.' : '') + '</p><div class="hint" id="hmN"></div></div>' +
+          '<div class="card" style="display:flex;flex-direction:column;gap:8px"><h2 style="margin:0">Kurulu ' + noun.toLowerCase() + 'ler</h2><div id="hmInst"></div></div>' +
+          '<div class="mods" id="hmOut"></div><div id="hmMore" style="text-align:center;margin:14px 0"></div>';
+        wireMods(h, b, cfOn, cf.ready);
+      });
+    }
+    function wireMods(h, b, cfOn, cfReady) {
+      var added = {}, offset = 0, token = 0;
       var loadInst = function () {
         inv('host_content', { id: h.id }).then(function (l) {
           $('#hmInst').innerHTML = l.length ? l.map(function (f) { return '<div class="srow"><div><b class="mono">' + esc(f) + '</b></div><button class="btn sm danger" data-hrm="' + esc(f) + '">Kaldır</button></div>'; }).join('') : '<span class="hint">Henüz yok.</span>';
           $$('[data-hrm]', b).forEach(function (x) { x.addEventListener('click', function () { inv('host_remove_content', { id: h.id, file: x.dataset.hrm }).then(loadInst).catch(actErr); }); });
         }).catch(function (e) { $('#hmInst').textContent = errText(e); });
       };
-      var run = function () {
-        $('#hmErr').textContent = ''; $('#hmOut').innerHTML = '<div class="card hint">Aranıyor...</div>';
-        inv('host_search', { id: h.id, query: $('#hmQ').value.trim(), category: modCat || null }).then(function (l) {
-          l = l.filter(function (x) { return x.server_side !== 'unsupported'; });
-          $('#hmOut').innerHTML = l.length ? l.map(function (x) {
-            var icon = x.icon_url ? '<img class="ic" src="' + esc(x.icon_url) + '" alt="" width="48" height="48">' : '<div class="ic" style="background:var(--panel-2);display:grid;place-items:center;font-weight:800">' + esc((x.title || '?').charAt(0).toUpperCase()) + '</div>';
-            var done = added[x.project_id];
-            return '<article class="card mod">' + icon + '<div class="tx"><h3>' + esc(x.title) + '</h3><p>' + esc(x.description) + '</p><div class="acts">' + (x.client_side === 'required' ? '<span class="pill warn">Oyuncular da kurmalı</span>' : '<span class="pill mute">Yalnızca server</span>') + (x.categories || []).slice(0, 3).map(function (c) { return '<span class="pill mute">' + esc(c) + '</span>'; }).join('') + '</div></div>' +
-              '<button class="btn sm' + (done ? '' : ' primary') + '" style="align-self:flex-start" data-hadd="' + esc(x.project_id) + '"' + (done ? ' disabled' : '') + '>' + (done ? 'Eklendi' : 'Ekle') + '</button></article>';
-          }).join('') : '<div class="card hint">Eşleşen sonuç yok. Aramayı kısaltmayı ya da kategoriyi "Tümü" yapmayı dene.</div>';
-          $$('[data-hadd]', b).forEach(function (x) {
-            x.addEventListener('click', function () {
-              x.disabled = true; x.textContent = 'Ekleniyor...';
-              inv('host_install', { id: h.id, project: x.dataset.hadd }).then(function (n) { added[x.dataset.hadd] = true; x.textContent = 'Eklendi'; x.classList.remove('primary'); toast(n.length ? n.join(', ') + ' eklendi' : 'Zaten ekli'); loadInst(); }).catch(function (e) { x.disabled = false; x.textContent = 'Ekle'; $('#hmErr').textContent = errText(e); });
-            });
-          });
-        }).catch(function (e) { $('#hmOut').innerHTML = ''; $('#hmErr').textContent = errText(e); });
+      var card = function (x) {
+        var icon = x.icon_url ? '<img class="ic" src="' + esc(x.icon_url) + '" alt="" width="48" height="48">' : '<div class="ic" style="background:var(--panel-2);display:grid;place-items:center;font-weight:800">' + esc((x.title || '?').charAt(0).toUpperCase()) + '</div>';
+        var done = added[x.source + '|' + x.project_id];
+        return '<article class="card mod">' + icon + '<div class="tx"><h3>' + esc(x.title) + '</h3><p>' + esc(x.description) + '</p><div class="acts">' + (x.client_side === 'required' ? '<span class="pill warn">Oyuncular da kurmalı</span>' : '<span class="pill mute">Yalnızca server</span>') + (x.downloads ? '<span class="pill mute">' + fmtN(x.downloads) + ' indirme</span>' : '') + (x.categories || []).slice(0, 3).map(function (c) { return '<span class="pill mute">' + esc(c) + '</span>'; }).join('') + '</div></div>' +
+          '<div style="display:flex;flex-direction:column;gap:6px"><button class="btn sm' + (done ? '' : ' primary') + '" data-hadd="' + esc(x.project_id) + '" data-hsrc="' + esc(x.source) + '"' + (done ? ' disabled' : '') + '>' + (done ? 'Eklendi' : 'Ekle') + '</button>' + (x.page_url ? '<button class="btn sm" data-hpage="' + esc(x.page_url) + '">Sayfa</button>' : '') + '</div></article>';
       };
-      $('#hmGo').addEventListener('click', run);
+      var run = function (append) {
+        if (cfOn && !cfReady) return;
+        var off = append ? offset : 0, my = ++token;
+        $('#hmErr').textContent = ''; $('#hmMore').innerHTML = '';
+        if (!append) { $('#hmOut').innerHTML = '<div class="card hint">Aranıyor...</div>'; $('#hmN').textContent = ''; }
+        inv('host_search', { id: h.id, query: $('#hmQ').value.trim(), category: cfOn ? null : (modCat || null), source: hsrc, sort: hsort, offset: off }).then(function (page) {
+          if (my !== token) return;
+          var raw = page.hits, l = raw.filter(function (x) { return x.server_side !== 'unsupported'; });
+          offset = off + raw.length;
+          if (!append) $('#hmOut').innerHTML = '';
+          if (!append && !l.length) $('#hmOut').innerHTML = '<div class="card hint">Eşleşen sonuç yok. Aramayı kısaltmayı, kategoriyi "Tümü" yapmayı ya da kaynağı değiştirmeyi dene.</div>';
+          $('#hmOut').insertAdjacentHTML('beforeend', l.map(card).join(''));
+          $('#hmN').textContent = page.total.toLocaleString('tr-TR') + ' sonuç, ' + Math.min(offset, page.total).toLocaleString('tr-TR') + ' tanesi tarandı';
+          if (raw.length && offset < page.total && offset < 9000) $('#hmMore').innerHTML = '<button class="btn" id="hmMoreBtn">Daha fazla yükle</button>';
+          var mb = $('#hmMoreBtn'); if (mb) mb.addEventListener('click', function () { run(true); });
+        }).catch(function (e) { if (my !== token) return; if (!append) $('#hmOut').innerHTML = ''; $('#hmErr').textContent = errText(e); });
+      };
+      b.onclick = function (ev) {
+        var x = ev.target.closest('[data-hadd]');
+        if (x && !x.disabled) {
+          x.disabled = true; x.textContent = 'Ekleniyor...';
+          inv('host_install', { id: h.id, project: x.dataset.hadd, source: x.dataset.hsrc }).then(function (n) { added[x.dataset.hsrc + '|' + x.dataset.hadd] = true; x.textContent = 'Eklendi'; x.classList.remove('primary'); toast(n.length ? n.join(', ') + ' eklendi' : 'Zaten ekli'); loadInst(); }).catch(function (e) { x.disabled = false; x.textContent = 'Ekle'; $('#hmErr').textContent = errText(e); });
+          return;
+        }
+        var pg = ev.target.closest('[data-hpage]'); if (pg) { inv('open_url', { url: pg.dataset.hpage }).catch(function (e) { toast(errText(e)); }); return; }
+        var sr = ev.target.closest('[data-hs]'); if (sr) { hsrc = sr.dataset.hs; tabMods(h, b); return; }
+        var ch = ev.target.closest('[data-hc]'); if (ch) { modCat = ch.dataset.hc; $$('[data-hc]', b).forEach(function (y) { y.setAttribute('aria-pressed', y === ch); }); run(); }
+      };
+      $('#hmGo').addEventListener('click', function () { run(); });
+      var timer; $('#hmQ').addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(function () { run(); }, 450); });
       $('#hmQ').addEventListener('keydown', function (e) { if (e.key === 'Enter') run(); });
-      $$('[data-hc]', b).forEach(function (x) { x.addEventListener('click', function () { modCat = x.dataset.hc; $$('[data-hc]', b).forEach(function (y) { y.setAttribute('aria-pressed', y === x); }); run(); }); });
+      $('#hmSort').addEventListener('change', function () { hsort = this.value; run(); });
+      var cfo = $('#hCfOpen'); if (cfo) cfo.addEventListener('click', function () { inv('open_url', { url: 'https://console.curseforge.com/' }).catch(function (e) { toast(errText(e)); }); });
+      var cfs = $('#hCfSave'); if (cfs) cfs.addEventListener('click', function () { inv('set_curseforge_key', { key: $('#hCfKey').value.trim() }).then(function () { toast('CurseForge anahtarı kaydedildi'); tabMods(h, b); }).catch(function (e) { $('#hmErr').textContent = errText(e); }); });
       loadInst(); run();
     }
 

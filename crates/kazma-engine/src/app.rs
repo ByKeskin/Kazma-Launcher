@@ -4,7 +4,7 @@
 use crate::install::{self, GameExit};
 use crate::net::*;
 use crate::report::Reporter;
-use crate::{discord, gametheme, importer, modtheme, modrinth, serverkit, skins, sync};
+use crate::{curseforge, discord, gametheme, importer, modtheme, modrinth, msauth, serverkit, skins, sync};
 use kazma_core::instance::{self, InstanceSpec, LoaderSpec};
 use crate::ping;
 use kazma_core::invite::{self, Invite};
@@ -59,6 +59,19 @@ pub struct Config {
     /// "obsidian" ya da "terminal" (launcher teması ile aynı).
     #[serde(default = "default_variant")]
     pub theme_variant: String,
+    /// CurseForge API anahtarı (console.curseforge.com, ücretsiz). Derlemeye gömülü anahtar varsa gerekmez.
+    #[serde(default)]
+    pub curseforge_key: Option<String>,
+    /// "offline" ya da "ms" (Microsoft hesabıyla giriş yapılmış).
+    #[serde(default = "default_account")]
+    pub account: String,
+    /// Azure uygulama kimliği (derlemeye gömülü kimlik yoksa kullanıcı girer).
+    #[serde(default)]
+    pub ms_client_id: Option<String>,
+}
+
+fn default_account() -> String {
+    "offline".into()
 }
 
 fn default_variant() -> String {
@@ -71,7 +84,7 @@ fn default_true() -> bool {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { player: String::new(), ram: default_ram(), last_instance: None, skin: None, uuid: None, discord: true, discord_app_id: None, game_theme: true, theme_variant: default_variant() }
+        Config { player: String::new(), ram: default_ram(), last_instance: None, skin: None, uuid: None, discord: true, discord_app_id: None, game_theme: true, theme_variant: default_variant(), curseforge_key: None, account: default_account(), ms_client_id: None }
     }
 }
 
@@ -90,6 +103,7 @@ pub fn set_player(root: &Path, name: &str) -> R<Config> {
         c.uuid = None;
     }
     c.player = name.to_string();
+    c.account = "offline".into();
     save_config(root, &c)?;
     Ok(c)
 }
@@ -101,6 +115,68 @@ pub fn set_identity(root: &Path, name: &str, uuid: &str) -> R<Config> {
     let mut c = load_config(root);
     c.player = name.to_string();
     c.uuid = Some(u);
+    c.account = "offline".into();
+    save_config(root, &c)?;
+    Ok(c)
+}
+
+// ---------- Microsoft hesabı ----------
+
+#[derive(Debug, Serialize)]
+pub struct MsStatus {
+    /// Azure uygulama kimliği var mı (gömülü ya da girilmiş)?
+    pub client_ready: bool,
+    /// Kimlik derlemeye gömülü mü (kullanıcıdan istenmez)?
+    pub builtin: bool,
+    pub signed_in: bool,
+}
+
+pub fn ms_status(root: &Path) -> MsStatus {
+    let c = load_config(root);
+    MsStatus { client_ready: msauth::client_id(c.ms_client_id.as_deref()).is_some(), builtin: msauth::client_id(None).is_some(), signed_in: c.account == "ms" && msauth::signed_in(root) }
+}
+
+pub fn set_ms_client_id(root: &Path, id: &str) -> R<MsStatus> {
+    let id = id.trim();
+    if !id.is_empty() && !msauth::client_id_ok(id) {
+        return Err("Bu bir Azure uygulama kimliğine benzemiyor. Azure portalındaki \"Application (client) ID\" değerini (8-4-4-4-12 karakterli) olduğu gibi yapıştır.".into());
+    }
+    let mut c = load_config(root);
+    c.ms_client_id = if id.is_empty() { None } else { Some(id.to_string()) };
+    save_config(root, &c)?;
+    Ok(ms_status(root))
+}
+
+/// 1. adım: ekranda gösterilecek kodu ve açılacak sayfayı verir.
+pub fn ms_begin(root: &Path) -> R<msauth::DeviceCode> {
+    let c = load_config(root);
+    let id = msauth::client_id(c.ms_client_id.as_deref()).ok_or("Microsoft girişi için Azure uygulama kimliği gerekli.")?;
+    msauth::begin(&id)
+}
+
+/// 2. adım: kullanıcı kodu girene kadar bekler, sonra hesabı etkinleştirir.
+pub fn ms_finish(root: &Path) -> R<Config> {
+    let p = msauth::finish(root)?;
+    let mut c = load_config(root);
+    c.player = p.name;
+    c.uuid = Some(p.uuid);
+    c.account = "ms".into();
+    save_config(root, &c)?;
+    Ok(c)
+}
+
+pub fn ms_open_page() -> R<()> {
+    let u = msauth::pending_uri().ok_or("Önce giriş kodu al.")?;
+    open_in_file_manager(Path::new(&u))
+}
+
+/// Kayıtlı Microsoft oturumunu siler; hesap çevrimdışıya döner (oyuncu adı kalır).
+pub fn ms_logout(root: &Path) -> R<Config> {
+    msauth::cancel();
+    msauth::forget(root);
+    let mut c = load_config(root);
+    c.account = "offline".into();
+    c.uuid = None;
     save_config(root, &c)?;
     Ok(c)
 }
@@ -192,6 +268,10 @@ pub fn set_skin(root: &Path, id: Option<String>) -> R<Config> {
 
 /// Başlatmadan önce seçili skini instance'a yazar. Hata oyunu engellemez.
 fn apply_active_skin(root: &Path, instance_id: &str, cfg: &Config) {
+    // Microsoft hesabında gerçek skin oyuna Mojang'dan gelir.
+    if cfg.account == "ms" {
+        return;
+    }
     if let Some(id) = &cfg.skin {
         let _ = skins::apply_to_instance(root, &root.join("instances").join(instance_id), &cfg.player, id);
     }
@@ -199,7 +279,7 @@ fn apply_active_skin(root: &Path, instance_id: &str, cfg: &Config) {
 
 /// Güvenilir kaynak listesindeki bir adresi varsayılan tarayıcıda açar.
 pub fn open_trusted_url(url: &str) -> R<()> {
-    if !skins::browse_url_allowed(url) {
+    if !skins::browse_url_allowed(url) && !curseforge::page_url_ok(url) {
         return Err("Bu adres izinli listede değil".into());
     }
     open_in_file_manager(Path::new(url))
@@ -227,17 +307,78 @@ pub fn open_instance_folder(root: &Path, id: &str) -> R<()> {
     open_in_file_manager(&instance_dir(root, id)?)
 }
 
+/// Kullanılacak CurseForge anahtarı: kullanıcının girdiği, yoksa derlemeye gömülü olan.
+pub fn cf_key(root: &Path) -> Option<String> {
+    load_config(root).curseforge_key.filter(|k| curseforge::key_ok(k)).or_else(|| curseforge::builtin_key().map(String::from))
+}
+
+#[derive(Debug, Serialize)]
+pub struct CfStatus {
+    pub ready: bool,
+    pub builtin: bool,
+}
+
+pub fn cf_status(root: &Path) -> CfStatus {
+    CfStatus { ready: cf_key(root).is_some(), builtin: curseforge::builtin_key().is_some() }
+}
+
+/// Boş değer anahtarı siler.
+pub fn set_curseforge_key(root: &Path, key: &str) -> R<CfStatus> {
+    let k = key.trim();
+    if !k.is_empty() && !curseforge::key_ok(k) {
+        return Err("Bu bir CurseForge API anahtarına benzemiyor. console.curseforge.com adresinden aldığın anahtarı olduğu gibi yapıştır.".into());
+    }
+    let mut c = load_config(root);
+    c.curseforge_key = if k.is_empty() { None } else { Some(k.to_string()) };
+    save_config(root, &c)?;
+    Ok(cf_status(root))
+}
+
+/// Kaynağa göre (modrinth ya da curseforge) arama. `sort`: relevance, downloads, follows, newest, updated.
+#[allow(clippy::too_many_arguments)]
+pub fn search_any(root: &Path, game: &str, loader: Option<&str>, kind: modrinth::Kind, query: &str, category: Option<&str>, source: &str, sort: &str, offset: u64) -> R<modrinth::Page> {
+    // Kaynak paketi ve shader aramasında yükleyici süzgeci olmaz.
+    let loader = if kind == modrinth::Kind::Mod { loader } else { None };
+    match source {
+        "curseforge" => {
+            let key = cf_key(root).ok_or("CurseForge için API anahtarı gerekli. Mod gezgininde anahtar kutusuna yapıştır.")?;
+            curseforge::search_live(&key, query, game, loader, kind, sort, offset)
+        }
+        _ => modrinth::search_page_live(query, game, loader, category, kind, sort, offset),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn install_any(root: &Path, dir: &Path, project: &str, game: &str, loader: Option<&str>, kind: modrinth::Kind, source: &str, rep: &dyn Reporter) -> R<Vec<String>> {
+    match source {
+        "curseforge" => {
+            let key = cf_key(root).ok_or("CurseForge için API anahtarı gerekli.")?;
+            curseforge::install_live(&key, dir, project, game, loader, kind, rep)
+        }
+        _ => modrinth::install_live(dir, project, game, loader, kind, rep),
+    }
+}
+
 /// Mod, kaynak paketi ya da shader arama. Modlar yükleyiciye göre, paketler yalnızca sürüme göre aranır.
 pub fn search_content(root: &Path, instance: &str, kind: &str, query: &str, category: Option<&str>) -> R<Vec<modrinth::Hit>> {
+    browse_content(root, instance, kind, query, category, "modrinth", "relevance", 0).map(|p| p.hits)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn browse_content(root: &Path, instance: &str, kind: &str, query: &str, category: Option<&str>, source: &str, sort: &str, offset: u64) -> R<modrinth::Page> {
     let info = read_info(root, instance)?;
     let k = modrinth::Kind::parse(kind)?;
     if k == modrinth::Kind::Mod && info.loader == "vanilla" {
         return Err("Mod aramak için Fabric, Quilt, Forge ya da NeoForge'lu bir instance seç.".into());
     }
-    modrinth::search_live(query, &info.game, Some(&info.loader), category, k)
+    search_any(root, &info.game, Some(&info.loader), k, query, category, source, sort, offset)
 }
 
 pub fn install_content(root: &Path, instance: &str, kind: &str, project: &str, rep: &dyn Reporter) -> R<Vec<String>> {
+    install_content_from(root, instance, kind, project, "modrinth", rep)
+}
+
+pub fn install_content_from(root: &Path, instance: &str, kind: &str, project: &str, source: &str, rep: &dyn Reporter) -> R<Vec<String>> {
     let info = read_info(root, instance)?;
     let k = modrinth::Kind::parse(kind)?;
     if k == modrinth::Kind::Mod {
@@ -249,7 +390,7 @@ pub fn install_content(root: &Path, instance: &str, kind: &str, project: &str, r
         }
     }
     let dir = root.join("instances").join(&info.id).join(k.dir());
-    modrinth::install_live(&dir, project, &info.game, Some(&info.loader), k, rep)
+    install_any(root, &dir, project, &info.game, Some(&info.loader), k, source, rep)
 }
 
 // ---------- instance kaydı ----------
@@ -396,7 +537,12 @@ fn mark_played(root: &Path, id: &str) {
     let _ = save_config(root, &c);
 }
 
-fn account_from(cfg: &Config) -> R<Account> {
+fn account_from(root: &Path, cfg: &Config) -> R<Account> {
+    if cfg.account == "ms" {
+        let id = msauth::client_id(cfg.ms_client_id.as_deref()).ok_or("Microsoft girişi için Azure uygulama kimliği gerekli.")?;
+        let s = msauth::session(&msauth::Live, root, &id)?;
+        return Ok(Account { name: s.name, uuid: s.uuid.replace('-', ""), access_token: s.token, user_type: "msa".into() });
+    }
     if cfg.player.is_empty() {
         return Err("Önce oyuncu adını belirle (sol alttaki hesap kutusu).".into());
     }
@@ -409,7 +555,7 @@ fn account_from(cfg: &Config) -> R<Account> {
 
 pub fn launch_instance(root: &Path, id: &str, java: &Option<PathBuf>, rep: &dyn Reporter) -> R<GameExit> {
     let cfg = load_config(root);
-    let acct = account_from(&cfg)?;
+    let acct = account_from(root, &cfg)?;
     let info = read_info(root, id)?;
     let spec = spec_of(&info)?;
     let env = Env::current();
@@ -420,7 +566,9 @@ pub fn launch_instance(root: &Path, id: &str, java: &Option<PathBuf>, rep: &dyn 
     };
     let opts = LaunchOptions { max_mb: cfg.ram, join_server: join, ..Default::default() };
     mark_played(root, id);
-    apply_active_skin(root, id, &cfg);
+    if cfg.account != "ms" {
+        apply_active_skin(root, id, &cfg);
+    }
     // Menü teması en iyi çabayla uygulanır; başarısız olursa oyun yine açılır.
     let jar = root.join(format!("versions/{0}/{0}.jar", inst.resolved.jar_id));
     if let Err(e) = gametheme::apply(&root.join("instances").join(&info.id), &info.game, &jar, &cfg.theme_variant, cfg.game_theme) {
@@ -768,7 +916,7 @@ pub fn join_view(p: &Prepared) -> JoinView {
 /// Server'ın sürümünü kurar, modları eşitler ve doğrudan server'a bağlanarak oyunu açar.
 pub fn join_run(root: &Path, p: &Prepared, trust_new: bool, java: &Option<PathBuf>, rep: &dyn Reporter) -> R<GameExit> {
     let cfg = load_config(root);
-    let acct = account_from(&cfg)?;
+    let acct = account_from(root, &cfg)?;
     let server_id = format!("{}:{}", p.invite.host, p.invite.port);
     if !p.signed && !trust_new {
         return Err("Bu paket imzasız. Kodu kimden aldığına güvendiğini onaylamadan katılamazsın.".into());
@@ -860,11 +1008,11 @@ mod tests {
         let r = tmp("ident");
         let c = set_identity(&r, "Notch", "069A79F444E94726A5BEFCA90E38AAF5").unwrap();
         assert_eq!(c.uuid.as_deref(), Some("069a79f4-44e9-4726-a5be-fca90e38aaf5"));
-        assert_eq!(account_from(&load_config(&r)).unwrap().uuid, "069a79f4-44e9-4726-a5be-fca90e38aaf5");
+        assert_eq!(account_from(&r, &load_config(&r)).unwrap().uuid, "069a79f4-44e9-4726-a5be-fca90e38aaf5");
         assert!(set_identity(&r, "Notch", "xyz").is_err());
         let c = set_player(&r, "Baska").unwrap();
         assert_eq!(c.uuid, None, "ad değişince eski kimlik düşer");
-        assert_eq!(account_from(&c).unwrap().uuid, kazma_core::account::offline_uuid("Baska").unwrap());
+        assert_eq!(account_from(&r, &c).unwrap().uuid, kazma_core::account::offline_uuid("Baska").unwrap());
         let _ = fs::remove_dir_all(&r);
     }
 

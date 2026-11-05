@@ -196,3 +196,10 @@ GitHub Actions her derlemede `Kazma-Kurulum.exe` üretir (NSIS sihirbazı: Türk
 
 ## Tema modunu launcher'dan kurmak
 Kütüphane'de Fabric + Minecraft 26.x instance'larında **Tema modunu uygula** düğmesi çıkar. Düğme modu bu deponun `mod-latest` sürümünden indirir (SHA-256 ve jar içeriği doğrulanır), gerekli Fabric API'yi ekler. **Tema modunu kaldır** aynı düğmeyle geri alır. `mod-latest` sürümünü `Kazma Tema modu` iş akışı main'e her gönderimde günceller; iş akışı kırmızıysa düğme "henüz yayınlanmamış" der.
+
+
+## Microsoft girişi, mod gezgini ve CurseForge
+
+- **Microsoft girişi** (cihaz kodu akışı): hesap kutusu → Microsoft. Kazma bir kod gösterir, tarayıcıda microsoft.com/link açılır, kod girilir. Şifre Kazma'ya hiç gelmez. Zincir: Microsoft → Xbox Live → XSTS → Minecraft hizmetleri. Yenileme anahtarı `accounts/microsoft.bin` içinde, Windows DPAPI ile şifreli (yalnızca bu kullanıcı çözer). Oyun başlarken anahtar gerekirse kendiliğinden yenilenir. Azure uygulama kimliği iki yoldan verilir: depo değişkeni `MS_CLIENT_ID` (derlemeye gömülür) ya da hesap penceresindeki kutu. Azure'da **Authentication → Allow public client flows** açık olmalı.
+- **Mod gezgini**: açılışta en çok indirilenler listelenir; sıralama (indirme, popüler, güncel, yeni), kategori, "Daha fazla yükle" ve yazarken otomatik arama var. Kaynak seçilebilir: **Modrinth** ya da **CurseForge**.
+- **CurseForge** ücretsiz API anahtarı ister (console.curseforge.com). Anahtar ya gezgindeki kutuya yapıştırılır ya da depo gizlisi `CURSEFORGE_API_KEY` olarak derlemeye gömülür. Dosyalar yalnızca forgecdn adreslerinden inip SHA-1 ile doğrulanır. Yazarı üçüncü taraf indirmeyi kapatmış modlar kurulamaz (site açılır). CurseForge'dan kurulan modlar paket kodunda "Modrinth'te bulunamayan" sayılır; oyuncular onları elle ekler.
